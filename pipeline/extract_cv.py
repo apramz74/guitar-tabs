@@ -37,8 +37,13 @@ def find_sections(video_path: str):
     video_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     step = max(1, round(video_fps / SAMPLE_FPS))
 
+    # Keep a frame when (a) it differs from the last KEPT frame — cumulative
+    # change from a slow scroll can't slip under a per-step threshold — and
+    # (b) the screen has SETTLED (≈ equal to the previous sample), so we never
+    # keep a blurry mid-scroll frame.
     sections = []
-    last_small = None
+    last_kept = None
+    prev_small = None
     frame_idx = 0
     while True:
         ok, frame = cap.read()
@@ -48,9 +53,12 @@ def find_sections(video_path: str):
             crop = crop_tab_region(frame)
             if crop.shape != frame.shape:  # strip found (fallback returns frame as-is)
                 small = cv2.cvtColor(cv2.resize(crop, (160, 40)), cv2.COLOR_BGR2GRAY)
-                if last_small is None or cv2.absdiff(small, last_small).mean() > 8.0:
+                stable = prev_small is not None and cv2.absdiff(small, prev_small).mean() < 3.0
+                changed = last_kept is None or cv2.absdiff(small, last_kept).mean() > 8.0
+                if changed and stable:
                     sections.append((frame_idx / video_fps, crop))
-                last_small = small
+                    last_kept = small
+                prev_small = small
         frame_idx += 1
     cap.release()
     return sections
@@ -81,80 +89,118 @@ def measure_section(crop):
 
     _, ink = cv2.threshold(roi, 0, 1, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
 
-    # string lines: rows where ink spans most of the width
-    line_rows = (ink.mean(axis=1) > 0.5).astype(np.int8)
+    # candidate line rows: rows where ink spans much of the width. This picks
+    # up real string lines AND impostors (box borders, rhythm-beam rows) —
+    # the sextet test below separates them
+    line_rows = (ink.mean(axis=1) > 0.45).astype(np.int8)
     idx = np.flatnonzero(np.diff(np.concatenate(([0], line_rows, [0]))))
     line_ys = [int((s + e) / 2) for s, e in zip(idx[::2], idx[1::2])]
-    if len(line_ys) != 6:
-        return {"error": f"expected 6 string lines, found {len(line_ys)}", "roi": roi}
 
-    top, bot = line_ys[0], line_ys[-1]
-    # bar lines: columns whose ink spans (almost) the full line block
-    col_span = ink[top:bot + 1].mean(axis=0)
-    bar_cols = (col_span > 0.75).astype(np.int8)
-    idx = np.flatnonzero(np.diff(np.concatenate(([0], bar_cols, [0]))))
-    bar_xs = [int((s + e) / 2) for s, e in zip(idx[::2], idx[1::2])]
-    # merge doubled detections (thick end-bars read as two)
-    merged, gap0 = [], (bot - top) / 5.0
-    for b in bar_xs:
-        if merged and b - merged[-1] < 0.5 * gap0:
-            merged[-1] = (merged[-1] + b) // 2
-        else:
-            merged.append(b)
-    bar_xs = merged
+    # a tab SYSTEM is 6 consecutive candidate rows with UNIFORM spacing;
+    # borders and beam rows sit at irregular distances. Rank every plausible
+    # window by spacing uniformity and take the most-uniform non-overlapping
+    # ones — a box border one slightly-off gap away must lose to the true
+    # sextet, so "first acceptable" is not good enough
+    cands = []
+    for i in range(len(line_ys) - 5):
+        win = line_ys[i:i + 6]
+        gaps = np.diff(win)
+        if gaps.min() > 4 and gaps.max() / gaps.min() < 1.35:
+            cands.append((float(np.std(gaps) / np.mean(gaps)), i, win))
+    system_wins, used = [], set()
+    for _, i, win in sorted(cands):
+        if not (set(range(i, i + 6)) & used):
+            system_wins.append(win)
+            used.update(range(i, i + 6))
+    system_wins.sort(key=lambda w: w[0])  # top-to-bottom = song order
+    if not system_wins:
+        return {"error": f"no uniform 6-line system among {len(line_ys)} line rows", "roi": roi}
 
-    # erase lines and bars; what's left is glyph ink
+    gap_med = float(np.median([np.diff(w).mean() for w in system_wins]))
+
+    # erase lines and bars everywhere; what's left is glyph ink
     horiz = cv2.morphologyEx(ink, cv2.MORPH_OPEN, np.ones((1, W // 8), np.uint8))
-    vert = cv2.morphologyEx(ink, cv2.MORPH_OPEN, np.ones((max(8, (bot - top) // 2), 1), np.uint8))
+    vert = cv2.morphologyEx(ink, cv2.MORPH_OPEN,
+                            np.ones((max(8, int(2.5 * gap_med)), 1), np.uint8))
     nonline = ink & ~horiz & ~vert
     # erasing a line cuts digits sitting on it in half. Restore line pixels
     # ONLY where glyph ink sits just above/below (a digit stroke crossing the
     # line) — a blind vertical bridge would fuse chord digits on adjacent
     # lines, which sit only a few px apart
-    thick = max(3, int(round(0.12 * gap0)))
+    thick = max(3, int(round(0.12 * gap_med)))
     support = cv2.dilate(nonline, np.ones((2 * thick + 1, 1), np.uint8))
     glyph_ink = (nonline | (horiz & support)).astype(np.uint8)
     glyph_ink = cv2.morphologyEx(glyph_ink, cv2.MORPH_CLOSE, np.ones((5, 3), np.uint8))
 
     n, labels, stats, centroids = cv2.connectedComponentsWithStats(glyph_ink, connectivity=8)
-    gap = (bot - top) / 5.0  # inter-line spacing
-    glyphs = []
+    raw = []
     for i in range(1, n):
         x, y, w, h, area = stats[i]
         # plausible digit: digits run ~0.85 line-gaps tall; line-erasure debris
         # is much shorter and wide — reject anything under ~0.55 gaps.
         # area floor stays low: a "1" is a thin bar with little ink
-        if not (0.55 * gap < h < 1.8 * gap) or area < 0.03 * gap * gap or w > 2.5 * gap:
+        if not (0.55 * gap_med < h < 1.8 * gap_med) or area < 0.03 * gap_med ** 2 \
+                or w > 2.5 * gap_med:
             continue
         cx, cy = centroids[i]
-        string = int(np.argmin([abs(cy - ly) for ly in line_ys])) + 1
-        glyphs.append({
+        raw.append({
             "cx": float(cx), "cy": float(cy), "bbox": (int(x), int(y), int(w), int(h)),
-            "string": string,
             "img": (glyph_ink[y:y + h, x:x + w] * 255).astype(np.uint8),
         })
-    # notes live ON the 6 lines — text above (titles, "Capo N") and rhythm
-    # notation below are outside the line band and are not notes
-    glyphs = [g for g in glyphs if top - 0.6 * gap < g["cy"] < bot + 0.6 * gap]
-    # nothing outside the tab's own border bars is a note
-    if len(bar_xs) >= 2:
-        glyphs = [g for g in glyphs if bar_xs[0] - gap < g["cx"] < bar_xs[-1] + gap]
-    glyphs.sort(key=lambda g: g["cx"])
-    return {"roi": roi, "line_ys": line_ys, "bar_xs": bar_xs, "glyphs": glyphs, "gap": gap}
+
+    systems = []
+    for win in system_wins:
+        top, bot = win[0], win[-1]
+        gap = (bot - top) / 5.0
+        # bar lines: columns whose ink spans (almost) the full line block
+        col_span = ink[top:bot + 1].mean(axis=0)
+        bar_cols = (col_span > 0.75).astype(np.int8)
+        idx = np.flatnonzero(np.diff(np.concatenate(([0], bar_cols, [0]))))
+        bar_xs = [int((s + e) / 2) for s, e in zip(idx[::2], idx[1::2])]
+        merged = []  # merge doubled detections (thick end-bars read as two)
+        for b in bar_xs:
+            if merged and b - merged[-1] < 0.5 * gap:
+                merged[-1] = (merged[-1] + b) // 2
+            else:
+                merged.append(b)
+        bar_xs = merged
+
+        # notes live ON this system's lines — text and rhythm notation outside
+        # the line band belong to no system and are not notes
+        glyphs = [dict(g) for g in raw if top - 0.6 * gap < g["cy"] < bot + 0.6 * gap]
+        for g in glyphs:
+            g["string"] = int(np.argmin([abs(g["cy"] - ly) for ly in win])) + 1
+        # nothing outside the tab's own border bars is a note — but a bar only
+        # counts as a border if it actually sits near an edge (a strip cut off
+        # at the screen edge has no left border; its first bar is mid-song)
+        if bar_xs and bar_xs[0] < 0.2 * W:
+            glyphs = [g for g in glyphs if g["cx"] > bar_xs[0] - gap]
+        if bar_xs and bar_xs[-1] > 0.8 * W:
+            glyphs = [g for g in glyphs if g["cx"] < bar_xs[-1] + gap]
+        glyphs.sort(key=lambda g: g["cx"])
+        systems.append({"line_ys": win, "bar_xs": bar_xs, "glyphs": glyphs, "gap": gap})
+
+    return {"roi": roi, "systems": systems}
+
+
+def section_glyphs(section):
+    return [g for sys in section["systems"] for g in sys["glyphs"]]
 
 
 def annotate(section, path: Path):
     """Draw measured geometry onto the ROI for visual verification."""
     vis = cv2.cvtColor(section["roi"], cv2.COLOR_GRAY2BGR)
-    for ly in section.get("line_ys", []):
-        cv2.line(vis, (0, ly), (vis.shape[1], ly), (255, 160, 0), 1)
-    for bx in section.get("bar_xs", []):
-        cv2.line(vis, (bx, 0), (bx, vis.shape[0]), (0, 180, 0), 2)
-    for g in section.get("glyphs", []):
-        x, y, w, h = g["bbox"]
-        cv2.rectangle(vis, (x - 2, y - 2), (x + w + 2, y + h + 2), (0, 0, 255), 2)
-        label = f"s{g['string']}" + (f":{g['digit']}" if "digit" in g else "")
-        cv2.putText(vis, label, (x - 2, y - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+    for sys_ in section.get("systems", []):
+        top, bot = sys_["line_ys"][0], sys_["line_ys"][-1]
+        for ly in sys_["line_ys"]:
+            cv2.line(vis, (0, ly), (vis.shape[1], ly), (255, 160, 0), 1)
+        for bx in sys_["bar_xs"]:
+            cv2.line(vis, (bx, max(0, top - 10)), (bx, min(vis.shape[0], bot + 10)), (0, 180, 0), 2)
+        for g in sys_["glyphs"]:
+            x, y, w, h = g["bbox"]
+            cv2.rectangle(vis, (x - 2, y - 2), (x + w + 2, y + h + 2), (0, 0, 255), 2)
+            label = f"s{g['string']}" + (f":{g['digit']}" if "digit" in g else "")
+            cv2.putText(vis, label, (x - 2, y - 6), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
     cv2.imwrite(str(path), vis)
 
 
@@ -189,17 +235,16 @@ def cluster_glyphs(all_glyphs, max_dist=0.12):
 
 # ---------------------------------------------------------------- assemble measures
 
-def build_measures(section):
-    """Glyphs -> ordered note events, split into measures at bar lines.
-    Chord = glyphs at (nearly) the same x. Requires digits already assigned."""
-    gap = section["gap"]
-    inner_bars = [b for b in section["bar_xs"]
-                  if 0.02 * section["roi"].shape[1] < b < 0.98 * section["roi"].shape[1]]
-    boundaries = sorted(inner_bars) + [section["roi"].shape[1] + 1]
+def build_measures(system, width):
+    """Glyphs of one system -> ordered note events, split into measures at bar
+    lines. Chord = glyphs at (nearly) the same x. Requires digits assigned."""
+    gap = system["gap"]
+    inner_bars = [b for b in system["bar_xs"] if 0.02 * width < b < 0.98 * width]
+    boundaries = sorted(inner_bars) + [width + 1]
 
     measures = [{"notes": []} for _ in boundaries]
     i = 0
-    glyphs = section["glyphs"]
+    glyphs = system["glyphs"]
     while i < len(glyphs):
         group = [glyphs[i]]
         while i + 1 < len(glyphs) and glyphs[i + 1]["cx"] - glyphs[i]["cx"] < 0.45 * gap:
@@ -257,20 +302,20 @@ def main():
                 print(f"      page {pi + 1} obs @ {ts:6.1f}s: {why} — dropped")
         if not meas:
             continue
-        counts = [len(m["glyphs"]) for m in meas]
+        counts = [len(section_glyphs(m)) for m in meas]
         agree = len(set(counts)) == 1
         # keep the modal-count observation; disagreement is flagged, not hidden
         modal = max(set(counts), key=counts.count)
-        chosen = next(m for m in meas if len(m["glyphs"]) == modal)
+        chosen = next(m for m in meas if len(section_glyphs(m)) == modal)
         chosen["consistent"] = agree
         chosen["obs_counts"] = counts
         sections.append(chosen)
         flag = "" if agree else f"  <-- OBSERVATIONS DISAGREE {counts}: verify this page"
-        print(f"      page {pi + 1} @ {chosen['ts']:5.1f}s: 6 lines, "
-              f"{len(chosen['bar_xs'])} bars, {modal} glyphs, {len(meas)} obs{flag}")
+        print(f"      page {pi + 1} @ {chosen['ts']:5.1f}s: "
+              f"{len(chosen['systems'])} system(s), {modal} glyphs, {len(meas)} obs{flag}")
 
     print("[3/4] clustering glyphs across the song ...")
-    all_glyphs = [g for s in sections for g in s["glyphs"]]
+    all_glyphs = [g for s in sections for g in section_glyphs(s)]
     reps = cluster_glyphs(all_glyphs)
     print(f"      {len(all_glyphs)} glyphs -> {len(reps)} unique shapes")
     for ci, rep in enumerate(reps):
@@ -317,13 +362,16 @@ def main():
         g["digit"] = int(val) if str(val).lstrip("-").isdigit() else str(val)
     # clusters labeled "x" are non-note symbols (rests, ornaments) — drop them
     for s in sections:
-        s["glyphs"] = [g for g in s["glyphs"] if g["digit"] != "x"]
+        for sys_ in s["systems"]:
+            sys_["glyphs"] = [g for g in sys_["glyphs"] if g["digit"] != "x"]
 
     from m1_spike import render_ascii  # noqa: E402
     song, page_dump = [], []
     for i, s in enumerate(sections, 1):
         annotate(s, dbg / f"page_{i}_annotated.png")
-        measures = build_measures(s)
+        measures = []
+        for sys_ in s["systems"]:  # top-to-bottom = song order within a screen
+            measures.extend(build_measures(sys_, s["roi"].shape[1]))
         song.extend(measures)
         page_dump.append({
             "page": i, "ts": s["ts"], "measures": measures,
