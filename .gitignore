@@ -1,0 +1,16 @@
+# secrets
+.env
+
+# python
+.venv/
+__pycache__/
+*.pyc
+
+# working data
+frames/
+*.mp4
+*.mov
+*.webm
+
+# os
+.DS_Store
