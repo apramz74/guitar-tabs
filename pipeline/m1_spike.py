@@ -362,9 +362,10 @@ def render_ascii(measures: list) -> str:
             cells, conns = {}, {}
             for n in notes:
                 try:
-                    cells[int(n["string"])] = str(int(n["fret"]))
+                    text = str(int(n["fret"]))
                 except (KeyError, TypeError, ValueError):
                     continue
+                cells[int(n["string"])] = f"({text})" if n.get("ghost") else text
                 if n.get("legato_next"):
                     conns[int(n["string"])] = n["legato_next"]
             if cells:

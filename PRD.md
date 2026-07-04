@@ -55,7 +55,12 @@ out by a calm frame. In crop space, every compared pixel is tab.
    all geometry deterministically** (string lines, digit-blob x/y, ordering,
    measure boundaries); a model or template matcher only answers "which digit
    is this glyph?" — hallucinated positions become structurally impossible.
-4. **"Glyph ID is reliable" is a hypothesis, not a fact.** It gets a dedicated
+4. **Cluster numbers are not stable across runs.** Digit labels are keyed by
+   cluster index today; any code change can shuffle indices and silently
+   misapply labels (caused a whole string of notes to vanish once). Always
+   re-check flashcards after a pipeline change. Proper fix (backlog): key
+   labels by the glyph's shape, not its index.
+5. **"Glyph ID is reliable" is a hypothesis, not a fact.** It gets a dedicated
    test (flashcard-read every glyph, human-verify against the crops) before
    anything depends on it. Fallback that removes AI entirely: within one video
    the tab font is uniform, so cluster identical glyphs and resolve each

@@ -412,7 +412,10 @@ def stitch_scroll(sections, offsets):
                 o["off"] = off
                 obs.append(o)
 
-    # merge sightings: per string, sort by global x, group near-identical spots
+    # merge sightings: per string, sort by global x, group near-identical
+    # spots. The radius is TIGHT (0.25 gap): stitched sightings of one note
+    # land within a few pixels, while a parenthesis or the second digit of
+    # "11" sits about half a gap away and must never fuse in
     from collections import Counter
     merged = []
     for string in range(1, 7):
@@ -420,7 +423,7 @@ def stitch_scroll(sections, offsets):
         i = 0
         while i < len(row):
             group = [row[i]]
-            while i + 1 < len(row) and row[i + 1]["gx"] - row[i]["gx"] < 0.5 * gap:
+            while i + 1 < len(row) and row[i + 1]["gx"] - row[i]["gx"] < 0.25 * gap:
                 i += 1
                 group.append(row[i])
             best_cluster = Counter(o["cluster"] for o in group).most_common(1)[0][0]
@@ -494,6 +497,24 @@ def join_two_digit_frets(glyphs, gap):
     return out
 
 
+def mark_ghosts(glyphs, gap):
+    """A digit wrapped in parentheses is a ghost (optional) note. The parens
+    are their own shapes, labeled "(" and ")". A note with "(" just to its
+    left and ")" just to its right, on the same string, is marked ghost —
+    and is rendered with its parentheses, e.g. (8)."""
+    notes = [g for g in glyphs if isinstance(g["digit"], int)]
+    opens = [g for g in glyphs if g["digit"] == "("]
+    closes = [g for g in glyphs if g["digit"] == ")"]
+    for n in notes:
+        has_open = any(o["string"] == n["string"] and 0 < n["cx"] - o["cx"] < 0.9 * gap
+                       for o in opens)
+        has_close = any(c["string"] == n["string"] and 0 < c["cx"] - n["cx"] < 0.9 * gap
+                        for c in closes)
+        if has_open and has_close:
+            n["ghost"] = True
+    return glyphs
+
+
 def attach_connectors(glyphs, gap):
     """Slur arcs and slide slashes sit between two notes on a string. Attach
     each to its neighbors and record how a guitarist writes it: h (hammer-on,
@@ -526,7 +547,7 @@ def build_measures(system, width):
 
     measures = [{"notes": []} for _ in boundaries]
     i = 0
-    glyphs = attach_connectors(join_two_digit_frets(system["glyphs"], gap), gap)
+    glyphs = attach_connectors(mark_ghosts(join_two_digit_frets(system["glyphs"], gap), gap), gap)
     while i < len(glyphs):
         group = [glyphs[i]]
         while i + 1 < len(glyphs) and glyphs[i + 1]["cx"] - glyphs[i]["cx"] < 0.45 * gap:
@@ -534,6 +555,7 @@ def build_measures(system, width):
             group.append(glyphs[i])
         mi = next(k for k, b in enumerate(boundaries) if group[0]["cx"] < b)
         notes = [{"string": g["string"], "fret": g.get("digit", -1),
+                  **({"ghost": True} if g.get("ghost") else {}),
                   **({"legato_next": g["legato_next"]} if g.get("legato_next") else {})}
                  for g in group]
         measures[mi]["notes"].append(notes[0] if len(notes) == 1 else {"chord": notes})
