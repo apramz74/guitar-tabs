@@ -187,6 +187,47 @@ def section_glyphs(section):
     return [g for sys in section["systems"] for g in sys["glyphs"]]
 
 
+def content_signature(section):
+    """What music does this page show? A bag of (string, digit) pairs.
+    Unordered on purpose: chord notes sit at nearly the same x, so their
+    order can flip between screenshots of the same page."""
+    return [(g["string"], str(g.get("digit", g["cluster"])))
+            for g in section_glyphs(section)]
+
+
+def merge_duplicate_neighbors(sections):
+    """A scrolling app shows the same measures on more than one screenshot.
+    If a page's content is almost the same as the page before it, they are the
+    same music: keep one copy (the more complete reading) and flag any
+    disagreement. Only NEIGHBORS are compared — a song may genuinely repeat a
+    section later, and real repeats must not be deleted.
+
+    Run this AFTER digit labels and junk removal: clutter (clef letters,
+    rests) differs between screenshots even when the music is identical."""
+    from collections import Counter
+    merged = []
+    for s in sections:
+        if merged:
+            prev = merged[-1]
+            ca, cb = Counter(content_signature(prev)), Counter(content_signature(s))
+            inter = sum((ca & cb).values())
+            union = sum((ca | cb).values())
+            ratio = inter / union if union else 0.0
+            if ratio > 0.8:
+                a, b = len(section_glyphs(prev)), len(section_glyphs(s))
+                keep = prev if a >= b else s
+                keep["ts"] = min(prev["ts"], s["ts"])
+                keep["dup_counts"] = [a, b]
+                keep["consistent"] = keep.get("consistent", True) and a == b
+                merged[-1] = keep
+                flag = "" if a == b else f" — readings disagree ({a} vs {b} marks): verify"
+                print(f"      merged two screenshots of the same music "
+                      f"(match {ratio:.0%}); kept the fuller one{flag}")
+                continue
+        merged.append(s)
+    return merged
+
+
 def annotate(section, path: Path):
     """Draw measured geometry onto the ROI for visual verification."""
     vis = cv2.cvtColor(section["roi"], cv2.COLOR_GRAY2BGR)
@@ -365,6 +406,9 @@ def main():
         for sys_ in s["systems"]:
             sys_["glyphs"] = [g for g in sys_["glyphs"] if g["digit"] != "x"]
 
+    # now that clutter is gone and digits are named, spot duplicate pages
+    sections = merge_duplicate_neighbors(sections)
+
     from m1_spike import render_ascii  # noqa: E402
     song, page_dump = [], []
     for i, s in enumerate(sections, 1):
@@ -378,6 +422,7 @@ def main():
             "ascii": render_ascii(measures),
             "consistent": s.get("consistent", True),
             "obs_glyph_counts": s.get("obs_counts", []),
+            "dup_counts": s.get("dup_counts", []),
             "annotated": f"page_{i}_annotated.png",
         })
 
