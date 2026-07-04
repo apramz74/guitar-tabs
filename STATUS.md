@@ -1,0 +1,93 @@
+# Project status & next steps
+
+Last updated: 2026-07-04. Read `PRD.md` for goals and decisions; this file is
+where we track progress between sessions. Plain English, always.
+
+## Where the project stands
+
+**The extraction pipeline works on three very different video styles.**
+One pipeline (`pipeline/extract_cv.py`) turns a screen-recorded guitar tutorial
+into tab data:
+
+| Video | Style | Result |
+|---|---|---|
+| Cannock Chase (IG Reel) | white tab strip, page flips, each page shown twice | 4 pages, 8 measures — user-QA'd ✓ |
+| Capo-6 song (tab app) | full-screen white app, scroll-jumps, clutter (clef, rests, time sig) | 2 pages, 4 measures |
+| Redbone (IG Reel) | white-on-black overlay, jump-scrolls sideways, legato notation | 1 stitched page, 5 measures — QA pending |
+
+**How it works, in one paragraph:** sample the video ~2×/second; find the tab
+on each frame by its six evenly spaced lines (any color scheme); measure every
+digit's exact position with pixel math (no AI decides positions); group
+identical shapes and have a human name each shape once from "flashcards";
+merge repeat sightings of the same page (verified by overlaying note ink);
+stitch sideways-moving tabs onto one long timeline (measured shifts, wrap-aware,
+weak links accepted when they match the app's usual jump); every note is seen
+several times and voted on.
+
+**Features working:** digits; chords; measures; two-digit frets (11–24); ghost
+notes rendered with parens `(8)`; slides `5/6`, `18\` (direction from the slash
+shape when there's no landing note); slur arcs as `7h9` / `p`; playhead-line
+removal; junk rejection (clef letters, rests, text, rhythm marks).
+
+**Hard-won lessons (see PRD §4 for details):**
+- Vision-LLM reading of tabs confabulates — positions must be measured, not
+  guessed. AI is only OK at naming isolated glyphs, and even that is verified.
+- Never pre-select "interesting" frames — keep everything, group by measurement.
+- Cluster label numbers shuffle between runs — re-check flashcards after any
+  pipeline change (bit us 3×).
+
+## Working label sets (so we don't re-derive them)
+
+- Video 1 `ScreenRecording_07-03-2026 17-10-24_1.MP4`:
+  `0=0 1=5 2=5 3=0 4=4 5=3 6=0 7=2 8=x 9=0`
+- Video 2 `ScreenRecording_07-03-2026 18-15-36_1.MP4`:
+  `0=x 1=0 2=8 3=7 4=x 5=5 6=3 7=1 8=2 9=x 10=x 11=4`
+- Video 3 `ScreenRecording_07-03-2026 23-12-48_1.MP4`:
+  `0=5 '1=slide/' 2=6 3=9 4=7 5=8 '6=(' '7=)' 8=x 9=x '10=slide/' 11=1 12=3 13=4 '14=slide\' 15=6 16=arc`
+
+Run: `.venv/bin/python pipeline/extract_cv.py <video> --debug-dir <dir> --label ...`
+(Labels are only valid for the pipeline version they were made on — re-check
+flashcards if the code changed.)
+
+## QA pages (claude.ai artifacts)
+
+- Cannock Chase: https://claude.ai/code/artifact/be584106-b6be-4dcf-96fe-ca9d29e5587a
+- Capo-6 song: https://claude.ai/code/artifact/bed73042-3189-4dd0-b1ce-4076928e9831
+- Redbone: https://claude.ai/code/artifact/7a9aab48-4352-4e90-83d8-94dd2c29448b
+- Page-builder scripts live in the session scratchpad (not in repo) — next
+  session should move them into `pipeline/` or rebuild as needed.
+
+## Next steps, in priority order
+
+1. **User QA of Redbone** (waiting on user). Specifically: is the arc over the
+   6-8 pair in measure 1 missing from our tab? Any other wrong/missing notes?
+2. **M3 — the phone practice website.** The point of the whole project: a
+   simple site (GitHub Pages) listing songs; tap one, get a big readable tab
+   for practice. Reads `data/songs/*.json`. We have real extracted songs now.
+   Scope for v1: song list + tab view, phone-first, no build step.
+3. **Save extracted songs into `data/songs/`** as the PRD §6 JSON (extraction
+   currently writes to scratchpad debug dirs only). Small task; do before M3.
+4. **Label-by-shape** (kills the fragile cluster-index labels): store labeled
+   glyph images per video; match new clusters to stored shapes by the same
+   distance metric. Removes relabel-after-every-change pain.
+5. **Capo / tuning capture** (user deferred): "Capo 2", "Capo 6", "Standard
+   Tuning" are on screen; read them into song metadata. Vision AI on a text
+   crop is acceptable here (it's text, and human-verifiable).
+6. **Small opens:** video-1 run now reports 9 measures (was 8 — likely one
+   measure split by a stray bar); the 5/6 pair has both a slide and an arc in
+   the video but we keep only the slide mark.
+
+## Deferred / not started
+
+- IG-link fetching (PRD M2) — user currently screen-records manually; fine.
+- Timing/rhythm, chord names (PRD non-goals for now).
+- Correction UI (PRD M4) — flashcards + QA pages cover this for now.
+
+## Working agreements
+
+- Plain English in all explanations and reports (user is a PM).
+- Human QA against source frames is the only ground truth — AI grading of
+  extraction quality has been wrong before.
+- Verify every pipeline change visually (annotated overlays) and rerun all
+  three videos before calling it done.
+- Commit at each verified milestone.
