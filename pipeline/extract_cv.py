@@ -20,9 +20,71 @@ import cv2
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from m1_spike import crop_tab_region  # noqa: E402  (strip finder, 2x upscaled)
 
 SAMPLE_FPS = 2.0
+
+
+# ---------------------------------------------------------------- tab band finder
+
+def _thin_line_rows(mask, min_frac=0.75, max_thick=12):
+    """Rows where marked pixels cover most of the width, in a band at most a
+    few pixels tall — the shape of a drawn tab line. A fraction test (not an
+    unbroken-run test) because compressed video breaks thin lines into
+    segments. Thick bands (a white page, a dark background) fail the
+    thinness check; short text fails the fraction check."""
+    dilated = cv2.dilate(mask.astype(np.uint8), np.ones((3, 1), np.uint8))
+    hits = dilated.mean(axis=1) > min_frac
+    idx = np.flatnonzero(np.diff(np.concatenate(([0], hits.view(np.int8), [0]))))
+    ys = []
+    for s, e in zip(idx[::2], idx[1::2]):
+        if e - s <= max_thick:
+            ys.append(int((s + e) / 2))
+    return ys
+
+
+def _uniform_sextets(ys):
+    """All windows of 6 candidate rows with even spacing, best (most even) first."""
+    cands = []
+    for i in range(len(ys) - 5):
+        win = ys[i:i + 6]
+        gaps = np.diff(win)
+        if gaps.min() > 4 and gaps.max() / gaps.min() < 1.35:
+            cands.append((float(np.std(gaps) / np.mean(gaps)), win))
+    return [w for _, w in sorted(cands)]
+
+
+def mask_playhead(bgr):
+    """Erase the pink/magenta playback cursor some apps draw over the tab.
+    In grayscale it would look like a bar line."""
+    b, g, r = bgr[..., 0].astype(int), bgr[..., 1].astype(int), bgr[..., 2].astype(int)
+    pink = (r - g > 45) & (b - g > 10) & (r > 100)
+    out = bgr.copy()
+    out[pink] = 0
+    return out
+
+
+def find_tab_band(frame):
+    """Locate the 6-line tab in a full frame by its LINES, light or dark theme.
+    Returns (crop, polarity) — polarity 'dark_ink' (black on white) or
+    'light_ink' (white on black) — or None if no tab is visible."""
+    clean = mask_playhead(frame)
+    gray = cv2.cvtColor(clean, cv2.COLOR_BGR2GRAY)
+    # line darkness/brightness varies by app — sweep a few thresholds and
+    # take the first that produces a valid, evenly spaced six-line pattern
+    candidates = [("dark_ink", gray < 90), ("dark_ink", gray < 130),
+                  ("dark_ink", gray < 170), ("light_ink", gray > 160),
+                  ("light_ink", gray > 100)]
+    for polarity, mask in candidates:
+        wins = _uniform_sextets(_thin_line_rows(mask))
+        if wins:
+            win = wins[0]
+            gap = (win[-1] - win[0]) / 5.0
+            y0 = max(0, int(win[0] - 1.6 * gap))
+            y1 = min(frame.shape[0], int(win[-1] + 1.6 * gap))
+            crop = clean[y0:y1]
+            crop = cv2.resize(crop, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
+            return crop, polarity
+    return None, None
 
 
 # ---------------------------------------------------------------- sections (crop-space diff)
@@ -37,57 +99,55 @@ def find_sections(video_path: str):
     video_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     step = max(1, round(video_fps / SAMPLE_FPS))
 
-    # Keep a frame when (a) it differs from the last KEPT frame — cumulative
-    # change from a slow scroll can't slip under a per-step threshold — and
-    # (b) the screen has SETTLED (≈ equal to the previous sample), so we never
-    # keep a blurry mid-scroll frame.
-    sections = []
-    last_kept = None
-    prev_small = None
+    samples = []  # every sampled frame that shows a tab: (ts, crop, polarity)
     frame_idx = 0
     while True:
         ok, frame = cap.read()
         if not ok:
             break
         if frame_idx % step == 0:
-            crop = crop_tab_region(frame)
-            if crop.shape != frame.shape:  # strip found (fallback returns frame as-is)
-                small = cv2.cvtColor(cv2.resize(crop, (160, 40)), cv2.COLOR_BGR2GRAY)
-                stable = prev_small is not None and cv2.absdiff(small, prev_small).mean() < 3.0
-                changed = last_kept is None or cv2.absdiff(small, last_kept).mean() > 8.0
-                if changed and stable:
-                    sections.append((frame_idx / video_fps, crop))
-                    last_kept = small
-                prev_small = small
+            crop, polarity = find_tab_band(frame)
+            if crop is not None:
+                samples.append((frame_idx / video_fps, crop, polarity))
         frame_idx += 1
     cap.release()
-    return sections
+
+    # Keep EVERY sampled frame that shows a tab. No cleverness here on
+    # purpose: every earlier attempt to pre-select "interesting" frames
+    # silently lost content on some video style. Downstream grouping works
+    # on measured, verified note-ink overlap — redundant frames are cheap,
+    # missing frames are not.
+    return samples
 
 
 # ---------------------------------------------------------------- geometry
 
-def measure_section(crop):
-    """Measure one tab-strip crop. Returns dict with line ys, bar xs, and glyph
-    blobs (each: centroid, bbox, string index, image) — or None if the strip
-    doesn't measure like a 6-line tab."""
+def measure_section(crop, polarity="dark_ink"):
+    """Measure one tab-strip crop. Returns dict with per-system line ys, bar
+    xs, and glyph blobs — or None if the crop doesn't measure like a tab."""
     gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
 
-    # tighten to the white strip proper (crop has a little scene padding).
-    # rows first; then columns measured ONLY within those rows. Background that
-    # still leaks in is handled downstream by the border-bar glyph filter.
-    white = gray > 200
-    white_rows = np.flatnonzero(white.mean(axis=1) > 0.55)
-    if not len(white_rows):
-        return None
-    y0, y1 = white_rows[0], white_rows[-1] + 1
-    white_cols = np.flatnonzero(white[y0:y1].mean(axis=0) > 0.75)
-    if not len(white_cols):
-        return None
-    x0, x1 = white_cols[0], white_cols[-1] + 1
-    roi = gray[y0:y1, x0:x1]
+    if polarity == "dark_ink":
+        # tighten to the white strip proper (crop has a little scene padding).
+        # rows first; then columns measured ONLY within those rows. Background
+        # that leaks in is handled downstream by the border-bar glyph filter.
+        white = gray > 200
+        white_rows = np.flatnonzero(white.mean(axis=1) > 0.55)
+        if not len(white_rows):
+            return None
+        y0, y1 = white_rows[0], white_rows[-1] + 1
+        white_cols = np.flatnonzero(white[y0:y1].mean(axis=0) > 0.75)
+        if not len(white_cols):
+            return None
+        x0, x1 = white_cols[0], white_cols[-1] + 1
+        roi = gray[y0:y1, x0:x1]
+        _, ink = cv2.threshold(roi, 0, 1, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+    else:
+        # light ink on dark, often a semi-transparent overlay: no white band
+        # to tighten to — use the whole crop, ink = the BRIGHT pixels
+        roi = gray
+        _, ink = cv2.threshold(roi, 0, 1, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     H, W = roi.shape
-
-    _, ink = cv2.threshold(roi, 0, 1, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
 
     # candidate line rows: rows where ink spans much of the width. This picks
     # up real string lines AND impostors (box borders, rhythm-beam rows) —
@@ -180,7 +240,7 @@ def measure_section(crop):
         glyphs.sort(key=lambda g: g["cx"])
         systems.append({"line_ys": win, "bar_xs": bar_xs, "glyphs": glyphs, "gap": gap})
 
-    return {"roi": roi, "systems": systems}
+    return {"roi": roi, "systems": systems, "glyph_ink": glyph_ink}
 
 
 def section_glyphs(section):
@@ -274,6 +334,137 @@ def cluster_glyphs(all_glyphs, max_dist=0.12):
     return [img for _, img in reps]
 
 
+# ---------------------------------------------------------------- scroll stitching
+
+def glyph_shift(sa, sb, probe_w=1024, probe_h=160):
+    """How far did the tab content move between two measured sections?
+    Compares NOTE INK only — the tab lines look identical under any shift and
+    would drag the estimate toward zero. Returns (dx in pixels, confidence)."""
+    fa = cv2.resize(sa["glyph_ink"].astype(np.float32) * 255, (probe_w, probe_h))
+    fb = cv2.resize(sb["glyph_ink"].astype(np.float32) * 255, (probe_w, probe_h))
+    (dx, _), conf = cv2.phaseCorrelate(fa, fb)
+    scale = sa["roi"].shape[1] / probe_w
+    return dx * scale, conf
+
+
+def overlap_score(sa, sb, dx):
+    """Do two sections really show the same tab shifted by dx? Lay the note
+    ink of one over the other at that shift and measure agreement (0..1).
+    Ink is thickened first so a couple of pixels of misalignment don't zero
+    out thin digit strokes."""
+    kernel = np.ones((5, 5), np.uint8)
+    A = cv2.dilate(sa["glyph_ink"], kernel)
+    B = cv2.dilate(sb["glyph_ink"], kernel)
+    h = min(A.shape[0], B.shape[0])
+    A, B = A[:h] > 0, B[:h] > 0
+    W = min(A.shape[1], B.shape[1])
+    d = int(round(dx))
+    lo, hi = max(0, -d), W - max(0, d)
+    if hi - lo < 200:
+        return 0.0
+    Ao = A[:, lo:hi]
+    Bo = B[:, lo + d:hi + d]
+    union = (Ao | Bo).sum()
+    return float((Ao & Bo).sum() / union) if union else 0.0
+
+
+def link_sections(sa, sb):
+    """Best (score, dx) linking two sections as 'same tab, shifted sideways'.
+
+    Phase correlation is circular: a big leftward jump on a W-wide window
+    aliases to a small rightward dx. Try the raw estimate and its wrapped
+    twins, then refine locally for the best ink agreement."""
+    dx0, _ = glyph_shift(sa, sb)
+    W = min(sa["glyph_ink"].shape[1], sb["glyph_ink"].shape[1])
+    best_score, best_dx = 0.0, 0.0
+    for cand in (dx0, dx0 - W, dx0 + W):
+        if abs(cand) > 0.95 * W:
+            continue
+        for d in np.arange(cand - 42, cand + 43, 6):
+            s = overlap_score(sa, sb, d)
+            if s > best_score:
+                best_score, best_dx = s, float(d)
+    return best_score, best_dx
+
+
+def stitch_scroll(sections, offsets):
+    """Combine overlapping windows of one horizontally moving tab into a
+    single long virtual page.
+
+    Every note lands on one global x-axis (window x + that window's offset);
+    sightings of the same note (same string, same global spot) merge, with a
+    vote on the note's shape. Returns one section dict."""
+    rois = [s["roi"] for s in sections]
+    h = min(r.shape[0] for r in rois)
+    w = min(r.shape[1] for r in rois)
+
+    gap = float(np.median([s["systems"][0]["gap"] for s in sections]))
+
+    # collect note sightings in global coordinates; skip window edges where
+    # digits may be cut in half
+    obs = []
+    for s, off in zip(sections, offsets):
+        W = s["roi"].shape[1]
+        for g in s["systems"][0]["glyphs"]:
+            if 0.03 * W < g["cx"] < 0.97 * W:
+                o = dict(g)
+                o["gx"] = g["cx"] + off
+                o["off"] = off
+                obs.append(o)
+
+    # merge sightings: per string, sort by global x, group near-identical spots
+    from collections import Counter
+    merged = []
+    for string in range(1, 7):
+        row = sorted([o for o in obs if o["string"] == string], key=lambda o: o["gx"])
+        i = 0
+        while i < len(row):
+            group = [row[i]]
+            while i + 1 < len(row) and row[i + 1]["gx"] - row[i]["gx"] < 0.5 * gap:
+                i += 1
+                group.append(row[i])
+            best_cluster = Counter(o["cluster"] for o in group).most_common(1)[0][0]
+            rep = next(o for o in group if o["cluster"] == best_cluster)
+            note = dict(rep)
+            note["cx"] = float(np.mean([o["gx"] for o in group]))
+            x, y, bw, bh = rep["bbox"]
+            note["bbox"] = (int(x + rep["off"]), y, bw, bh)
+            note["sightings"] = len(group)
+            merged.append(note)
+            i += 1
+    merged.sort(key=lambda g: g["cx"])
+
+    # merge bar-line sightings the same way; require 2+ sightings (a one-off
+    # vertical artifact is not a bar)
+    bar_obs = sorted(b + off for s, off in zip(sections, offsets)
+                     for b in s["systems"][0]["bar_xs"]
+                     if 0.03 * s["roi"].shape[1] < b < 0.97 * s["roi"].shape[1])
+    bars = []
+    i = 0
+    while i < len(bar_obs):
+        j = i
+        while j + 1 < len(bar_obs) and bar_obs[j + 1] - bar_obs[j] < 0.5 * gap:
+            j += 1
+        if j - i + 1 >= 2:
+            bars.append(int(np.mean(bar_obs[i:j + 1])))
+        i = j + 1
+
+    # panorama of all windows for visual verification
+    total_w = int(max(offsets) + w) + 10
+    pano = np.zeros((h, total_w), np.uint8)
+    for r, off in zip(rois, offsets):
+        x0 = int(off)
+        pano[:, x0:x0 + w] = np.maximum(pano[:, x0:x0 + w], r[:h, :w])
+
+    line_ys = sections[0]["systems"][0]["line_ys"]
+    return {
+        "ts": sections[0]["ts"], "roi": pano, "consistent": True,
+        "n_windows": len(sections),
+        "systems": [{"line_ys": line_ys, "bar_xs": bars,
+                     "glyphs": merged, "gap": gap}],
+    }
+
+
 # ---------------------------------------------------------------- assemble measures
 
 def build_measures(system, width):
@@ -311,54 +502,96 @@ def main():
     dbg = Path(args.debug_dir)
     dbg.mkdir(parents=True, exist_ok=True)
 
-    print("[1/4] finding sections (crop-space change detection) ...")
+    print("[1/4] finding tab screens ...")
     sections_raw = find_sections(args.video)
-    print(f"      {len(sections_raw)} distinct tab sections")
+    print(f"      {len(sections_raw)} sampled frames show a tab")
 
-    # merge repeats: tutorials often show each page more than once. Repeats are
-    # free redundancy — two independent measurements of the same page must agree
-    pages = []
-    for ts, crop in sections_raw:
-        small = cv2.cvtColor(cv2.resize(crop, (160, 40)), cv2.COLOR_BGR2GRAY)
-        for p in pages:
-            if cv2.absdiff(small, p["small"]).mean() < 8.0:
-                p["obs"].append((ts, crop))
-                break
+    print("[2/4] measuring geometry (every frame) ...")
+    measured = []
+    dropped = 0
+    for ts, crop, pol in sections_raw:
+        m = measure_section(crop, pol)
+        if m and "error" not in m:
+            m["ts"] = ts
+            measured.append(m)
         else:
-            pages.append({"small": small, "obs": [(ts, crop)]})
-    print(f"      {len(pages)} unique pages "
-          f"({', '.join(str(len(p['obs'])) + ' obs' for p in pages)})")
+            dropped += 1
+    print(f"      {len(measured)} frames measured"
+          + (f", {dropped} dropped (blur/transition)" if dropped else ""))
 
-    print("[2/4] measuring geometry (every observation of every page) ...")
+    # group repeat sightings of the SAME page: verified by laying the note
+    # ink of one screen over the other at (near-)zero shift. Tutorials often
+    # show a page more than once — repeats are free redundancy, and two
+    # measurements of one page must agree. Lookback 2 catches the common
+    # A-B-A-B teaching pattern without ever merging distant real repeats.
+    groups = []
+    for m in measured:
+        placed = False
+        for g in groups[-2:]:
+            score, dx = link_sections(g[0], m)
+            gap = m["systems"][0]["gap"]
+            if abs(dx) < 0.4 * gap and score > 0.45:
+                g.append(m)
+                placed = True
+                break
+        if not placed:
+            groups.append([m])
+
     sections = []
-    for pi, p in enumerate(pages):
-        meas = []
-        for ts, crop in p["obs"]:
-            m = measure_section(crop)
-            if m and "error" not in m:
-                m["ts"] = ts
-                meas.append(m)
-            else:
-                why = m["error"] if m else "no measurable strip"
-                print(f"      page {pi + 1} obs @ {ts:6.1f}s: {why} — dropped")
-        if not meas:
-            continue
-        counts = [len(section_glyphs(m)) for m in meas]
+    for gi, g in enumerate(groups):
+        counts = [len(section_glyphs(x)) for x in g]
         agree = len(set(counts)) == 1
         # keep the modal-count observation; disagreement is flagged, not hidden
         modal = max(set(counts), key=counts.count)
-        chosen = next(m for m in meas if len(section_glyphs(m)) == modal)
+        chosen = next(x for x in g if len(section_glyphs(x)) == modal)
         chosen["consistent"] = agree
         chosen["obs_counts"] = counts
         sections.append(chosen)
         flag = "" if agree else f"  <-- OBSERVATIONS DISAGREE {counts}: verify this page"
-        print(f"      page {pi + 1} @ {chosen['ts']:5.1f}s: "
-              f"{len(chosen['systems'])} system(s), {modal} glyphs, {len(meas)} obs{flag}")
+        print(f"      page {gi + 1} @ {chosen['ts']:5.1f}s: "
+              f"{len(chosen['systems'])} system(s), {modal} glyphs, {len(g)} obs{flag}")
 
     print("[3/4] clustering glyphs across the song ...")
     all_glyphs = [g for s in sections for g in section_glyphs(s)]
     reps = cluster_glyphs(all_glyphs)
     print(f"      {len(all_glyphs)} glyphs -> {len(reps)} unique shapes")
+
+    # chain neighboring sections that are the same tab shifted sideways
+    # (a scrolling or jumping tab); unrelated pages stay separate because
+    # their note ink does not line up at any shift
+    if len(sections) > 1 and all(len(s["systems"]) == 1 for s in sections):
+        links = [link_sections(a, b) for a, b in zip(sections, sections[1:])]
+        # an app that scrolls in jumps uses the SAME jump size every time —
+        # a weak link whose shift matches the established jump is still real
+        # (its overlap region just happened to hold few notes)
+        strong_dx = [dx for sc, dx in links if sc > 0.3 and abs(dx) > 100]
+        med = float(np.median(strong_dx)) if strong_dx else None
+        chains = [[(sections[0], 0.0)]]
+        for (score, dx), cur_s in zip(links, sections[1:]):
+            ok = score > 0.3
+            if not ok and med is not None and score > 0.12 \
+                    and abs(dx - med) < 0.12 * abs(med):
+                ok = True
+                print(f"      accepted a weak link (score {score:.2f}) — its "
+                      f"shift {dx:.0f} matches the app's usual jump {med:.0f}")
+            if ok:
+                chains[-1].append((cur_s, chains[-1][-1][1] - dx))
+            else:
+                chains.append([(cur_s, 0.0)])
+        if any(len(ch) > 1 for ch in chains):
+            new_sections = []
+            for ch in chains:
+                if len(ch) == 1:
+                    new_sections.append(ch[0][0])
+                    continue
+                secs = [s for s, _ in ch]
+                offs = [o for _, o in ch]
+                base = min(offs)
+                st = stitch_scroll(secs, [o - base for o in offs])
+                print(f"      chained {len(secs)} windows of one moving tab "
+                      f"into a single page ({len(section_glyphs(st))} merged notes)")
+                new_sections.append(st)
+            sections = new_sections
     for ci, rep in enumerate(reps):
         big = cv2.resize(rep, None, fx=4, fy=4, interpolation=cv2.INTER_NEAREST)
         cv2.imwrite(str(dbg / f"glyph_cluster_{ci}.png"), 255 - big)
@@ -398,9 +631,10 @@ def main():
     if args.label:
         print(f"      human labels applied: { {k: digits[k] for k in sorted(digits)} }")
 
-    for g in all_glyphs:
-        val = digits.get(g["cluster"], "-1")
-        g["digit"] = int(val) if str(val).lstrip("-").isdigit() else str(val)
+    for s in sections:
+        for g in section_glyphs(s):
+            val = digits.get(g["cluster"], "-1")
+            g["digit"] = int(val) if str(val).lstrip("-").isdigit() else str(val)
     # clusters labeled "x" are non-note symbols (rests, ornaments) — drop them
     for s in sections:
         for sys_ in s["systems"]:
