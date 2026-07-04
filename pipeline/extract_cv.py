@@ -196,15 +196,23 @@ def measure_section(crop, polarity="dark_ink"):
     raw = []
     for i in range(1, n):
         x, y, w, h, area = stats[i]
+        fill = area / max(w * h, 1)
         # plausible digit: digits run ~0.85 line-gaps tall; line-erasure debris
         # is much shorter and wide — reject anything under ~0.55 gaps.
         # area floor stays low: a "1" is a thin bar with little ink
-        if not (0.55 * gap_med < h < 1.8 * gap_med) or area < 0.03 * gap_med ** 2 \
-                or w > 2.5 * gap_med:
+        is_digit = (0.55 * gap_med < h < 1.8 * gap_med
+                    and area >= 0.03 * gap_med ** 2 and w <= 2.5 * gap_med)
+        # slur arc: wide, short, and HOLLOW — a thin curve fills little of its
+        # box, while straight line-debris of the same size fills nearly all
+        is_arc = (0.9 * gap_med < w < 3.5 * gap_med
+                  and 0.12 * gap_med < h < 0.65 * gap_med
+                  and fill < 0.45 and area >= 0.02 * gap_med ** 2)
+        if not (is_digit or is_arc):
             continue
         cx, cy = centroids[i]
         raw.append({
             "cx": float(cx), "cy": float(cy), "bbox": (int(x), int(y), int(w), int(h)),
+            "shape": "arc" if (is_arc and not is_digit) else "glyph",
             "img": (glyph_ink[y:y + h, x:x + w] * 255).astype(np.uint8),
         })
 
@@ -226,8 +234,11 @@ def measure_section(crop, polarity="dark_ink"):
         bar_xs = merged
 
         # notes live ON this system's lines — text and rhythm notation outside
-        # the line band belong to no system and are not notes
-        glyphs = [dict(g) for g in raw if top - 0.6 * gap < g["cy"] < bot + 0.6 * gap]
+        # the line band belong to no system and are not notes. Arcs float
+        # higher above their notes, so they get a wider band
+        glyphs = [dict(g) for g in raw
+                  if (top - (1.2 if g.get("shape") == "arc" else 0.6) * gap
+                      < g["cy"] < bot + 0.6 * gap)]
         for g in glyphs:
             g["string"] = int(np.argmin([abs(g["cy"] - ly) for ly in win])) + 1
         # nothing outside the tab's own border bars is a note — but a bar only
@@ -521,20 +532,49 @@ def attach_connectors(glyphs, gap):
     pitch up) / p (pull-off, pitch down) for a slur; / or \\ for a slide.
     Returns notes only — connectors are consumed."""
     notes = [g for g in glyphs if isinstance(g["digit"], int)]
-    for c in (g for g in glyphs if g["digit"] in ("slide", "arc")):
-        row = [n for n in notes if n["string"] == c["string"]]
-        left = max((n for n in row if n["cx"] < c["cx"] + 0.3 * gap),
-                   key=lambda n: n["cx"], default=None)
-        right = min((n for n in row if n["cx"] > c["cx"] - 0.3 * gap
-                     and (left is None or n["cx"] > left["cx"])),
-                    key=lambda n: n["cx"], default=None)
-        if left is None or right is None:
-            continue
-        up = right["digit"] > left["digit"]
+
+    def bracketing_pair(c, strings):
+        """Nearest note pair (left, right) around the connector's x, searched
+        on the given strings; the tightest, most centered pair wins."""
+        best = None
+        for s in strings:
+            row = sorted((n for n in notes if n["string"] == s), key=lambda n: n["cx"])
+            left = max((n for n in row if n["cx"] < c["cx"] + 0.3 * gap),
+                       key=lambda n: n["cx"], default=None)
+            right = min((n for n in row if left is not None and n["cx"] > left["cx"]),
+                        key=lambda n: n["cx"], default=None)
+            if left is None or right is None:
+                continue
+            if right["cx"] - left["cx"] > c["bbox"][2] + 2.5 * gap:
+                continue  # pair far wider than the mark — not what it connects
+            score = abs((left["cx"] + right["cx"]) / 2 - c["cx"]) \
+                + 0.5 * gap * abs(s - c["string"])
+            if best is None or score < best[0]:
+                best = (score, left, right)
+        return (best[1], best[2]) if best else (None, None)
+
+    for c in (g for g in glyphs
+              if g["digit"] == "arc" or str(g["digit"]).startswith("slide")):
         if c["digit"] == "arc":
-            left["legato_next"] = "h" if up else "p"
+            # an arc floats above its notes — its nearest line may be one off
+            strings = [s for s in (c["string"], c["string"] + 1, c["string"] - 1)
+                       if 1 <= s <= 6]
         else:
-            left["legato_next"] = "/" if up else "\\"
+            strings = [c["string"]]
+        left, right = bracketing_pair(c, strings)
+        if left is not None and right is not None:
+            up = right["digit"] > left["digit"]
+            left["legato_next"] = ("h" if up else "p") if c["digit"] == "arc" \
+                else ("/" if up else "\\")
+            continue
+        # a slide with no note after it (an 18\ sliding out to nothing):
+        # the slash shape itself says which way it points
+        if c["digit"] in ("slide/", "slide\\"):
+            row = [n for n in notes if n["string"] == c["string"]]
+            left = max((n for n in row if n["cx"] < c["cx"] + 0.3 * gap),
+                       key=lambda n: n["cx"], default=None)
+            if left is not None and c["cx"] - left["cx"] < 2.0 * gap:
+                left["legato_next"] = c["digit"][-1]
     return notes
 
 
