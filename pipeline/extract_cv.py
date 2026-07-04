@@ -467,6 +467,56 @@ def stitch_scroll(sections, offsets):
 
 # ---------------------------------------------------------------- assemble measures
 
+def join_two_digit_frets(glyphs, gap):
+    """'13' is drawn as a 1 and a 3 almost touching on the same string —
+    join such pairs into one note. Only 1 or 2 can lead (frets stop at 24),
+    and the two shapes must be far closer than separately played notes."""
+    out = []
+    i = 0
+    glyphs = sorted(glyphs, key=lambda g: (g["string"], g["cx"]))
+    while i < len(glyphs):
+        a = glyphs[i]
+        b = glyphs[i + 1] if i + 1 < len(glyphs) else None
+        if (b and a["string"] == b["string"]
+                and isinstance(a["digit"], int) and isinstance(b["digit"], int)
+                and a["digit"] in (1, 2)
+                and b["cx"] - a["cx"] < 0.75 * gap
+                and int(f"{a['digit']}{b['digit']}") <= 24):
+            joined = dict(a)
+            joined["digit"] = int(f"{a['digit']}{b['digit']}")
+            joined["cx"] = (a["cx"] + b["cx"]) / 2
+            out.append(joined)
+            i += 2
+        else:
+            out.append(a)
+            i += 1
+    out.sort(key=lambda g: g["cx"])
+    return out
+
+
+def attach_connectors(glyphs, gap):
+    """Slur arcs and slide slashes sit between two notes on a string. Attach
+    each to its neighbors and record how a guitarist writes it: h (hammer-on,
+    pitch up) / p (pull-off, pitch down) for a slur; / or \\ for a slide.
+    Returns notes only — connectors are consumed."""
+    notes = [g for g in glyphs if isinstance(g["digit"], int)]
+    for c in (g for g in glyphs if g["digit"] in ("slide", "arc")):
+        row = [n for n in notes if n["string"] == c["string"]]
+        left = max((n for n in row if n["cx"] < c["cx"] + 0.3 * gap),
+                   key=lambda n: n["cx"], default=None)
+        right = min((n for n in row if n["cx"] > c["cx"] - 0.3 * gap
+                     and (left is None or n["cx"] > left["cx"])),
+                    key=lambda n: n["cx"], default=None)
+        if left is None or right is None:
+            continue
+        up = right["digit"] > left["digit"]
+        if c["digit"] == "arc":
+            left["legato_next"] = "h" if up else "p"
+        else:
+            left["legato_next"] = "/" if up else "\\"
+    return notes
+
+
 def build_measures(system, width):
     """Glyphs of one system -> ordered note events, split into measures at bar
     lines. Chord = glyphs at (nearly) the same x. Requires digits assigned."""
@@ -476,14 +526,16 @@ def build_measures(system, width):
 
     measures = [{"notes": []} for _ in boundaries]
     i = 0
-    glyphs = system["glyphs"]
+    glyphs = attach_connectors(join_two_digit_frets(system["glyphs"], gap), gap)
     while i < len(glyphs):
         group = [glyphs[i]]
         while i + 1 < len(glyphs) and glyphs[i + 1]["cx"] - glyphs[i]["cx"] < 0.45 * gap:
             i += 1
             group.append(glyphs[i])
         mi = next(k for k, b in enumerate(boundaries) if group[0]["cx"] < b)
-        notes = [{"string": g["string"], "fret": g.get("digit", -1)} for g in group]
+        notes = [{"string": g["string"], "fret": g.get("digit", -1),
+                  **({"legato_next": g["legato_next"]} if g.get("legato_next") else {})}
+                 for g in group]
         measures[mi]["notes"].append(notes[0] if len(notes) == 1 else {"chord": notes})
         i += 1
     return [m for m in measures if m["notes"]]

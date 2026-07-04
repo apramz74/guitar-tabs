@@ -344,27 +344,31 @@ def stitch(readings: list) -> list:
 # ---------------------------------------------------------------- ascii rendering
 
 def render_ascii(measures: list) -> str:
-    """Render measures as classic 6-line ASCII tab."""
+    """Render measures as classic 6-line ASCII tab. A note may carry
+    "legato_next" ("h", "p", "/", "\\") — drawn as the connector to the
+    following note on that string, the way guitarists write 5h6 or 7/11."""
     string_names = ["e", "B", "G", "D", "A", "E"]  # index 0 = string 1 (high e)
     lines = [[] for _ in range(6)]
 
-    def emit_column(cells: dict):
+    def emit_column(cells: dict, conns: dict):
         width = max((len(v) for v in cells.values()), default=1)
         for s in range(6):
             lines[s].append(cells.get(s + 1, "-" * width).rjust(width, "-"))
-            lines[s].append("-")
+            lines[s].append(conns.get(s + 1, "-"))
 
     for mi, measure in enumerate(measures):
         for event in measure.get("notes", []):
             notes = event.get("chord", [event]) if isinstance(event, dict) else []
-            cells = {}
+            cells, conns = {}, {}
             for n in notes:
                 try:
                     cells[int(n["string"])] = str(int(n["fret"]))
                 except (KeyError, TypeError, ValueError):
                     continue
+                if n.get("legato_next"):
+                    conns[int(n["string"])] = n["legato_next"]
             if cells:
-                emit_column(cells)
+                emit_column(cells, conns)
         if mi < len(measures) - 1:
             for s in range(6):
                 lines[s].append("|-")
