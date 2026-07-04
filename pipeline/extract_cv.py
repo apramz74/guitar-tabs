@@ -208,6 +208,36 @@ def measure_section(crop, polarity="dark_ink"):
                   and 0.12 * gap_med < h < 0.65 * gap_med
                   and fill < 0.45 and area >= 0.02 * gap_med ** 2)
         if not (is_digit or is_arc):
+            # a slur arc that crosses a string line gets fused with restored
+            # line pixels and comes out far too wide for any digit or arc
+            # (measured: the Redbone 6-8 arc reads 4.2 gaps wide). Strip the
+            # line rows and re-test the biggest piece: a real arc leaves its
+            # hollow crown; straight line debris leaves nothing arc-shaped
+            if fill < 0.45 and w > 3.0 * gap_med and h < 1.0 * gap_med:
+                comp = ((labels[y:y + h, x:x + w] == i)
+                        & (horiz[y:y + h, x:x + w] == 0)).astype(np.uint8)
+                n2, lab2, st2, cen2 = cv2.connectedComponentsWithStats(comp, connectivity=8)
+                # largest piece that still reads as an arc crown wins. The
+                # piece fill bound is laxer than is_arc's (the close-morph
+                # fattens a lone crown) — safe, the parent already proved
+                # hollow, and line debris pieces run fill 0.5+ at 1-2px tall
+                best = None
+                for j in range(1, n2):
+                    x2, y2, w2, h2, a2 = st2[j]
+                    f2 = a2 / max(w2 * h2, 1)
+                    if (0.9 * gap_med < w2 < 3.5 * gap_med
+                            and 0.12 * gap_med < h2 < 0.65 * gap_med
+                            and f2 <= 0.5 and a2 >= 0.02 * gap_med ** 2
+                            and (best is None or a2 > st2[best][4])):
+                        best = j
+                if best is not None:
+                    x2, y2, w2, h2, a2 = st2[best]
+                    raw.append({
+                        "cx": float(x + cen2[best][0]), "cy": float(y + cen2[best][1]),
+                        "bbox": (int(x + x2), int(y + y2), int(w2), int(h2)),
+                        "shape": "arc",
+                        "img": ((lab2[y2:y2 + h2, x2:x2 + w2] == best) * 255).astype(np.uint8),
+                    })
             continue
         cx, cy = centroids[i]
         raw.append({

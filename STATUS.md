@@ -26,8 +26,11 @@ several times and voted on.
 
 **Features working:** digits; chords; measures; two-digit frets (11–24); ghost
 notes rendered with parens `(8)`; slides `5/6`, `18\` (direction from the slash
-shape when there's no landing note); slur arcs as `7h9` / `p`; playhead-line
-removal; junk rejection (clef letters, rests, text, rhythm marks).
+shape when there's no landing note); slur arcs as `7h9` / `p` — including arcs
+that cross a string line (fixed 2026-07-04: those came out fused with line
+pixels, too wide to be recognized; a rescue step now strips the line rows and
+keeps the arc's crown); playhead-line removal; junk rejection (clef letters,
+rests, text, rhythm marks).
 
 **Hard-won lessons (see PRD §4 for details):**
 - Vision-LLM reading of tabs confabulates — positions must be measured, not
@@ -42,8 +45,9 @@ removal; junk rejection (clef letters, rests, text, rhythm marks).
   `0=0 1=5 2=5 3=0 4=4 5=3 6=0 7=2 8=x 9=0`
 - Video 2 `ScreenRecording_07-03-2026 18-15-36_1.MP4`:
   `0=x 1=0 2=8 3=7 4=x 5=5 6=3 7=1 8=2 9=x 10=x 11=4`
-- Video 3 `ScreenRecording_07-03-2026 23-12-48_1.MP4`:
-  `0=5 '1=slide/' 2=6 3=9 4=7 5=8 '6=(' '7=)' 8=x 9=x '10=slide/' 11=1 12=3 13=4 '14=slide\' 15=6 16=arc`
+- Video 3 `ScreenRecording_07-03-2026 23-12-48_1.MP4` (re-labeled 2026-07-04
+  after the arc fix added a cluster and shifted indices — old sets are stale):
+  `0=5 '1=slide/' 2=6 3=9 4=7 5=8 6=arc '7=(' '8=)' 9=x 10=x '11=slide/' 12=1 13=3 14=4 '15=slide\' 16=6 17=arc`
 
 Run: `.venv/bin/python pipeline/extract_cv.py <video> --debug-dir <dir> --label ...`
 (Labels are only valid for the pipeline version they were made on — re-check
@@ -54,26 +58,40 @@ flashcards if the code changed.)
 - Cannock Chase: https://claude.ai/code/artifact/be584106-b6be-4dcf-96fe-ca9d29e5587a
 - Capo-6 song: https://claude.ai/code/artifact/bed73042-3189-4dd0-b1ce-4076928e9831
 - Redbone: https://claude.ai/code/artifact/7a9aab48-4352-4e90-83d8-94dd2c29448b
-- Page-builder scripts live in the session scratchpad (not in repo) — next
-  session should move them into `pipeline/` or rebuild as needed.
+- Page-builder scripts now live in `pipeline/qa/` (moved 2026-07-04). The
+  Redbone one takes the debug dir as an argument:
+  `pipeline/qa/build_qa_video3.py <debug-dir> -o page.html`
+
+## Done 2026-07-04
+
+- **Songs saved to `data/songs/`** (`cannock-chase`, `capo-6-song`, `redbone`)
+  plus `index.json` for the future website. New script `pipeline/save_song.py`
+  turns any run's `extraction.json` into a song file. All marked `qa: draft`
+  ("Capo 6 Song" is a placeholder title — ask user for the real one).
+- **Missing-arc bug found and fixed.** User confirmed the arc over the 6-8
+  pair in Redbone measure 1 was absent. Cause: that arc crosses a string
+  line; line-pixel restore fused it into a blob 4.2 gaps wide — too wide for
+  both the digit and the arc test, so it was silently dropped. Fix: a rescue
+  step strips line rows from wide hollow rejects and keeps the arc crown.
+  Redbone now shows `6h8` in measures 1 and 4 (matches the video's "H"
+  marks); videos 1 and 2 re-ran byte-identical; QA page updated.
 
 ## Next steps, in priority order
 
-1. **User QA of Redbone** (waiting on user). Specifically: is the arc over the
-   6-8 pair in measure 1 missing from our tab? Any other wrong/missing notes?
+1. **User QA of Redbone** (waiting on user) — the 6-8 arc is now in; check
+   the rest of the arcs and any wrong/missing notes.
 2. **M3 — the phone practice website.** The point of the whole project: a
    simple site (GitHub Pages) listing songs; tap one, get a big readable tab
    for practice. Reads `data/songs/*.json`. We have real extracted songs now.
    Scope for v1: song list + tab view, phone-first, no build step.
-3. **Save extracted songs into `data/songs/`** as the PRD §6 JSON (extraction
-   currently writes to scratchpad debug dirs only). Small task; do before M3.
-4. **Label-by-shape** (kills the fragile cluster-index labels): store labeled
+   **On hold until user says go.**
+3. **Label-by-shape** (kills the fragile cluster-index labels): store labeled
    glyph images per video; match new clusters to stored shapes by the same
    distance metric. Removes relabel-after-every-change pain.
-5. **Capo / tuning capture** (user deferred): "Capo 2", "Capo 6", "Standard
+4. **Capo / tuning capture** (user deferred): "Capo 2", "Capo 6", "Standard
    Tuning" are on screen; read them into song metadata. Vision AI on a text
    crop is acceptable here (it's text, and human-verifiable).
-6. **Small opens:** video-1 run now reports 9 measures (was 8 — likely one
+5. **Small opens:** video-1 run now reports 9 measures (was 8 — likely one
    measure split by a stray bar); the 5/6 pair has both a slide and an arc in
    the video but we keep only the slide mark.
 

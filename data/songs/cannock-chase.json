@@ -1,0 +1,322 @@
+{
+  "title": "Cannock Chase",
+  "artist": "jmu.sikk",
+  "source": "ScreenRecording_07-03-2026 17-10-24_1.MP4",
+  "tuning": "EADGBE",
+  "capo": 0,
+  "qa": "draft",
+  "measures": [
+    {
+      "notes": [
+        {
+          "string": 5,
+          "fret": 0
+        },
+        {
+          "chord": [
+            {
+              "string": 2,
+              "fret": 5
+            },
+            {
+              "string": 4,
+              "fret": 5
+            }
+          ]
+        },
+        {
+          "string": 3,
+          "fret": 0
+        },
+        {
+          "string": 5,
+          "fret": 0
+        },
+        {
+          "string": 1,
+          "fret": 0
+        },
+        {
+          "string": 2,
+          "fret": 0
+        },
+        {
+          "string": 3,
+          "fret": 0
+        }
+      ]
+    },
+    {
+      "notes": [
+        {
+          "string": 5,
+          "fret": 0
+        },
+        {
+          "chord": [
+            {
+              "string": 4,
+              "fret": 5
+            },
+            {
+              "string": 2,
+              "fret": 0
+            }
+          ]
+        },
+        {
+          "string": 3,
+          "fret": 0
+        },
+        {
+          "string": 5,
+          "fret": 5
+        },
+        {
+          "string": 1,
+          "fret": 0
+        },
+        {
+          "string": 2,
+          "fret": 5
+        },
+        {
+          "string": 3,
+          "fret": 5
+        }
+      ]
+    },
+    {
+      "notes": [
+        {
+          "string": 5,
+          "fret": 0
+        },
+        {
+          "chord": [
+            {
+              "string": 4,
+              "fret": 4
+            },
+            {
+              "string": 2,
+              "fret": 3
+            }
+          ]
+        },
+        {
+          "string": 3,
+          "fret": 4
+        },
+        {
+          "string": 5,
+          "fret": 0
+        },
+        {
+          "string": 1,
+          "fret": 5
+        },
+        {
+          "string": 2,
+          "fret": 3
+        },
+        {
+          "string": 3,
+          "fret": 4
+        }
+      ]
+    },
+    {
+      "notes": [
+        {
+          "string": 5,
+          "fret": 0
+        },
+        {
+          "chord": [
+            {
+              "string": 4,
+              "fret": 4
+            },
+            {
+              "string": 2,
+              "fret": 3
+            }
+          ]
+        },
+        {
+          "string": 3,
+          "fret": 4
+        },
+        {
+          "string": 5,
+          "fret": 0
+        },
+        {
+          "string": 1,
+          "fret": 0
+        },
+        {
+          "string": 2,
+          "fret": 3
+        },
+        {
+          "string": 3,
+          "fret": 4
+        }
+      ]
+    },
+    {
+      "notes": [
+        {
+          "string": 6,
+          "fret": 3
+        },
+        {
+          "chord": [
+            {
+              "string": 4,
+              "fret": 4
+            },
+            {
+              "string": 2,
+              "fret": 3
+            }
+          ]
+        },
+        {
+          "string": 3,
+          "fret": 4
+        },
+        {
+          "string": 6,
+          "fret": 3
+        },
+        {
+          "string": 1,
+          "fret": 0
+        },
+        {
+          "string": 2,
+          "fret": 3
+        },
+        {
+          "string": 3,
+          "fret": 4
+        }
+      ]
+    },
+    {
+      "notes": [
+        {
+          "string": 6,
+          "fret": 3
+        },
+        {
+          "chord": [
+            {
+              "string": 4,
+              "fret": 4
+            },
+            {
+              "string": 2,
+              "fret": 3
+            }
+          ]
+        },
+        {
+          "string": 3,
+          "fret": 4
+        },
+        {
+          "string": 6,
+          "fret": 3
+        },
+        {
+          "string": 1,
+          "fret": 0
+        },
+        {
+          "string": 2,
+          "fret": 3
+        },
+        {
+          "string": 3,
+          "fret": 4
+        }
+      ]
+    },
+    {
+      "notes": [
+        {
+          "string": 6,
+          "fret": 2
+        }
+      ]
+    },
+    {
+      "notes": [
+        {
+          "string": 6,
+          "fret": 0
+        },
+        {
+          "string": 3,
+          "fret": 0
+        },
+        {
+          "string": 6,
+          "fret": 5
+        },
+        {
+          "string": 1,
+          "fret": 5
+        },
+        {
+          "string": 2,
+          "fret": 0
+        },
+        {
+          "string": 3,
+          "fret": 5
+        }
+      ]
+    },
+    {
+      "notes": [
+        {
+          "string": 6,
+          "fret": 0
+        },
+        {
+          "chord": [
+            {
+              "string": 4,
+              "fret": 0
+            },
+            {
+              "string": 2,
+              "fret": 0
+            }
+          ]
+        },
+        {
+          "string": 3,
+          "fret": 0
+        },
+        {
+          "string": 6,
+          "fret": 0
+        },
+        {
+          "string": 1,
+          "fret": 0
+        },
+        {
+          "string": 3,
+          "fret": 0
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,221 @@
+{
+  "title": "Redbone",
+  "artist": "Childish Gambino",
+  "source": "ScreenRecording_07-03-2026 23-12-48_1.MP4",
+  "tuning": "EADGBE",
+  "capo": 0,
+  "qa": "draft",
+  "measures": [
+    {
+      "notes": [
+        {
+          "string": 1,
+          "fret": 5,
+          "legato_next": "/"
+        },
+        {
+          "string": 1,
+          "fret": 6
+        },
+        {
+          "string": 2,
+          "fret": 9
+        },
+        {
+          "string": 2,
+          "fret": 7
+        },
+        {
+          "string": 2,
+          "fret": 6
+        },
+        {
+          "string": 3,
+          "fret": 6
+        },
+        {
+          "string": 4,
+          "fret": 8
+        },
+        {
+          "string": 3,
+          "fret": 6,
+          "legato_next": "h"
+        },
+        {
+          "string": 3,
+          "fret": 8
+        }
+      ]
+    },
+    {
+      "notes": [
+        {
+          "string": 3,
+          "fret": 8,
+          "ghost": true
+        },
+        {
+          "string": 3,
+          "fret": 6
+        },
+        {
+          "string": 3,
+          "fret": 8
+        },
+        {
+          "string": 2,
+          "fret": 7
+        },
+        {
+          "string": 1,
+          "fret": 9
+        },
+        {
+          "string": 1,
+          "fret": 6
+        },
+        {
+          "string": 2,
+          "fret": 6
+        },
+        {
+          "string": 2,
+          "fret": 7
+        },
+        {
+          "string": 2,
+          "fret": 9
+        },
+        {
+          "string": 2,
+          "fret": 7
+        }
+      ]
+    },
+    {
+      "notes": [
+        {
+          "string": 2,
+          "fret": 7,
+          "ghost": true,
+          "legato_next": "/"
+        },
+        {
+          "string": 2,
+          "fret": 11
+        },
+        {
+          "string": 1,
+          "fret": 11
+        },
+        {
+          "string": 1,
+          "fret": 13
+        },
+        {
+          "string": 1,
+          "fret": 14
+        },
+        {
+          "string": 1,
+          "fret": 18,
+          "legato_next": "\\"
+        }
+      ]
+    },
+    {
+      "notes": [
+        {
+          "string": 1,
+          "fret": 5,
+          "legato_next": "/"
+        },
+        {
+          "string": 1,
+          "fret": 6
+        },
+        {
+          "string": 2,
+          "fret": 9
+        },
+        {
+          "string": 2,
+          "fret": 7
+        },
+        {
+          "string": 2,
+          "fret": 6
+        },
+        {
+          "string": 3,
+          "fret": 6
+        },
+        {
+          "string": 4,
+          "fret": 8
+        },
+        {
+          "string": 3,
+          "fret": 6,
+          "legato_next": "h"
+        },
+        {
+          "string": 3,
+          "fret": 8
+        },
+        {
+          "string": 3,
+          "fret": 8,
+          "ghost": true
+        },
+        {
+          "string": 3,
+          "fret": 6
+        },
+        {
+          "string": 3,
+          "fret": 8
+        },
+        {
+          "string": 2,
+          "fret": 7
+        },
+        {
+          "string": 1,
+          "fret": 9
+        }
+      ]
+    },
+    {
+      "notes": [
+        {
+          "string": 1,
+          "fret": 6
+        },
+        {
+          "string": 2,
+          "fret": 7,
+          "legato_next": "h"
+        },
+        {
+          "string": 2,
+          "fret": 9
+        },
+        {
+          "string": 2,
+          "fret": 7
+        },
+        {
+          "string": 3,
+          "fret": 8
+        },
+        {
+          "string": 3,
+          "fret": 8,
+          "ghost": true
+        }
+      ]
+    }
+  ]
+}

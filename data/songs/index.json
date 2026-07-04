@@ -1,0 +1,26 @@
+[
+  {
+    "file": "cannock-chase.json",
+    "title": "Cannock Chase",
+    "artist": "jmu.sikk",
+    "capo": 0,
+    "measures": 9,
+    "qa": "draft"
+  },
+  {
+    "file": "capo-6-song.json",
+    "title": "Capo 6 Song",
+    "artist": "",
+    "capo": 6,
+    "measures": 4,
+    "qa": "draft"
+  },
+  {
+    "file": "redbone.json",
+    "title": "Redbone",
+    "artist": "Childish Gambino",
+    "capo": 0,
+    "measures": 5,
+    "qa": "draft"
+  }
+]
