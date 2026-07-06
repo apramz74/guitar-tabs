@@ -80,11 +80,25 @@ flashcards if the code changed.)
 
 1. **User QA of Redbone** (waiting on user) — the 6-8 arc is now in; check
    the rest of the arcs and any wrong/missing notes.
-2. **M3 — the phone practice website.** The point of the whole project: a
-   simple site (GitHub Pages) listing songs; tap one, get a big readable tab
-   for practice. Reads `data/songs/*.json`. We have real extracted songs now.
-   Scope for v1: song list + tab view, phone-first, no build step.
-   **On hold until user says go.**
+2. **M3 v1 BUILT (2026-07-06) — `web/` practice app.** Static, no build
+   step: song list; tab view with big fret numbers, REAL drawn arcs with
+   h/p riding the curve (user requirement), slanted slide strokes, ghost
+   parens; font size stepper; edit mode (tap a note → fret/string/mark/
+   ghost, add/delete note); rename, delete + restore. Edits save as local
+   drafts in the phone browser (localStorage) overlaying the committed
+   JSON; "Download JSON" exports a corrected file to commit. Verified:
+   all three songs rendered at phone width; edit/rename/revert/delete/
+   restore click-tested (Playwright + system Chrome).
+   Run locally: `python3 -m http.server` from repo root → open `/web/`.
+   **Still open for M3 (user asked, not yet answered 2026-07-06):**
+   - Write path for phone edits: GitHub-API-with-token (recommended) vs
+     Mac-only vs drafts-only. Drafts work today; token path can slot into
+     `saveDraft()`/menu later.
+   - Video intake ("submit video for analysis"): recommended as a small
+     Mac-local import app wrapping the pipeline (extract → label
+     flashcards → preview → save). Not built yet.
+   - Publishing: repo has NO GitHub remote yet. Pages needs: create repo,
+     push, enable Pages (user decision: account/public-vs-private).
 3. **Label-by-shape** (kills the fragile cluster-index labels): store labeled
    glyph images per video; match new clusters to stored shapes by the same
    distance metric. Removes relabel-after-every-change pain.
