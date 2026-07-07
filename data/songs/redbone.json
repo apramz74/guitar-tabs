@@ -70,7 +70,11 @@
         {
           "string": 1,
           "fret": 9
-        },
+        }
+      ]
+    },
+    {
+      "notes": [
         {
           "string": 1,
           "fret": 6
@@ -163,7 +167,13 @@
         {
           "string": 3,
           "fret": 8
-        },
+        }
+      ],
+      "suspect": true,
+      "repeat_of": 0
+    },
+    {
+      "notes": [
         {
           "string": 3,
           "fret": 8,
@@ -185,7 +195,8 @@
           "string": 1,
           "fret": 9
         }
-      ]
+      ],
+      "repeat_of": 1
     },
     {
       "notes": [
@@ -209,7 +220,11 @@
         {
           "string": 3,
           "fret": 8
-        },
+        }
+      ]
+    },
+    {
+      "notes": [
         {
           "string": 3,
           "fret": 8,

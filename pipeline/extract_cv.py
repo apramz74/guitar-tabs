@@ -271,12 +271,21 @@ def measure_section(crop, polarity="dark_ink"):
                       < g["cy"] < bot + 0.6 * gap)]
         for g in glyphs:
             g["string"] = int(np.argmin([abs(g["cy"] - ly) for ly in win])) + 1
-        # nothing outside the tab's own border bars is a note — but a bar only
-        # counts as a border if it actually sits near an edge (a strip cut off
-        # at the screen edge has no left border; its first bar is mid-song)
-        if bar_xs and bar_xs[0] < 0.2 * W:
+        # nothing outside the tab's own border bars is a note. A bar counts
+        # as a border if it sits near an edge, or if the string lines simply
+        # STOP beyond it — past the border there is scene, not tab, and
+        # anything "detected" there is background junk (a strip cut off at
+        # the screen edge has no border: its lines run to the edge)
+        def lines_extend(x0, x1):
+            x0, x1 = max(0, int(x0)), min(W, int(x1))
+            if x1 - x0 < gap:
+                return True          # region too thin to judge
+            return float(np.mean([ink[ly, x0:x1].mean() for ly in win])) > 0.25
+        if bar_xs and (bar_xs[0] < 0.2 * W
+                       or (bar_xs[0] < 0.45 * W and not lines_extend(0, bar_xs[0] - gap))):
             glyphs = [g for g in glyphs if g["cx"] > bar_xs[0] - gap]
-        if bar_xs and bar_xs[-1] > 0.8 * W:
+        if bar_xs and (bar_xs[-1] > 0.8 * W
+                       or (bar_xs[-1] > 0.55 * W and not lines_extend(bar_xs[-1] + gap, W))):
             glyphs = [g for g in glyphs if g["cx"] < bar_xs[-1] + gap]
         glyphs.sort(key=lambda g: g["cx"])
         systems.append({"line_ys": win, "bar_xs": bar_xs, "glyphs": glyphs, "gap": gap})
@@ -338,6 +347,15 @@ def annotate(section, path: Path):
             cv2.line(vis, (0, ly), (vis.shape[1], ly), (255, 160, 0), 1)
         for bx in sys_["bar_xs"]:
             cv2.line(vis, (bx, max(0, top - 10)), (bx, min(vis.shape[0], bot + 10)), (0, 180, 0), 2)
+        # bar repairs: added = yellow, removed = red cross, suspect = orange tick
+        for bx, kind in sys_.get("bar_flags", []):
+            if kind == "added":
+                cv2.line(vis, (bx, max(0, top - 16)), (bx, min(vis.shape[0], bot + 16)), (0, 255, 255), 2)
+            elif kind == "removed":
+                cv2.line(vis, (bx - 8, top - 8), (bx + 8, top + 8), (0, 0, 255), 2)
+                cv2.line(vis, (bx - 8, top + 8), (bx + 8, top - 8), (0, 0, 255), 2)
+            else:
+                cv2.line(vis, (bx, max(0, top - 24)), (bx, top - 6), (0, 165, 255), 3)
         for g in sys_["glyphs"]:
             x, y, w, h = g["bbox"]
             cv2.rectangle(vis, (x - 2, y - 2), (x + w + 2, y + h + 2), (0, 0, 255), 2)
@@ -483,14 +501,15 @@ def stitch_scroll(sections, offsets):
     bar_obs = sorted(b + off for s, off in zip(sections, offsets)
                      for b in s["systems"][0]["bar_xs"]
                      if 0.03 * s["roi"].shape[1] < b < 0.97 * s["roi"].shape[1])
-    bars = []
+    bars, singles = [], []
     i = 0
     while i < len(bar_obs):
         j = i
         while j + 1 < len(bar_obs) and bar_obs[j + 1] - bar_obs[j] < 0.5 * gap:
             j += 1
-        if j - i + 1 >= 2:
-            bars.append(int(np.mean(bar_obs[i:j + 1])))
+        # a one-off vertical artifact is not a bar — but keep singles as
+        # CANDIDATES: sanitize_bars accepts one that lands on the width grid
+        (bars if j - i + 1 >= 2 else singles).append(int(np.mean(bar_obs[i:j + 1])))
         i = j + 1
 
     # panorama of all windows for visual verification
@@ -504,9 +523,137 @@ def stitch_scroll(sections, offsets):
     return {
         "ts": sections[0]["ts"], "roi": pano, "consistent": True,
         "n_windows": len(sections),
-        "systems": [{"line_ys": line_ys, "bar_xs": bars,
+        "systems": [{"line_ys": line_ys, "bar_xs": bars, "bar_singles": singles,
                      "glyphs": merged, "gap": gap}],
     }
+
+
+# ---------------------------------------------------------------- bar sanity
+
+def sanitize_bars(sections):
+    """Measures in one video are drawn near-uniform in width. Use that,
+    song-wide, to repair bar detection: drop a bar that carves out a
+    sliver measure, add bars where a span is a clean multiple of the
+    typical width (placed in a note-free gap, or at a single-sighting
+    stitched candidate that agrees). Positions only — no AI, no timing.
+
+    Each system gets sys["bar_flags"] = [(x, kind), ...] with kind in
+    added / removed / suspect, for annotation and per-measure flags."""
+    # 0. stitched pages: a bar seen in only ONE window was parked as a
+    # "single" candidate. Judge each against the width grid formed by ALL
+    # candidates together — a real bar makes reasonable measures on both
+    # sides; an artifact lands next to a real bar and makes a sliver
+    for s in sections:
+        for sys_ in s["systems"]:
+            singles = sys_.pop("bar_singles", [])
+            if not singles:
+                continue
+            all_c = sorted(sys_["bar_xs"] + singles)
+            c_spans = [b2 - b1 for b1, b2 in zip(all_c, all_c[1:])]
+            if not c_spans:
+                continue
+            m_all = float(np.median(c_spans))
+            flags = sys_.setdefault("bar_flags", [])
+            for x in singles:
+                i = all_c.index(x)
+                neigh = [all_c[i] - all_c[i - 1]] if i else []
+                neigh += [all_c[i + 1] - all_c[i]] if i + 1 < len(all_c) else []
+                if neigh and min(neigh) > 0.5 * m_all:
+                    sys_["bar_xs"] = sorted(sys_["bar_xs"] + [x])
+                    flags.append((x, "added"))
+                else:
+                    all_c.remove(x)
+
+    spans = []
+    for s in sections:
+        for sys_ in s["systems"]:
+            bs = sorted(sys_["bar_xs"])
+            spans += [b2 - b1 for b1, b2 in zip(bs, bs[1:]) if b2 > b1]
+    if len(spans) < 2:
+        return
+    M = float(np.median(spans))
+    print(f"      measure widths: typical ≈ {M:.0f}px; "
+          f"all spans {[int(w) for w in sorted(spans)]}")
+
+    def grid_err(bs):
+        return sum(abs((b2 - b1) / M - max(1, round((b2 - b1) / M)))
+                   for b1, b2 in zip(bs, bs[1:]))
+
+    for s in sections:
+        W = s["roi"].shape[1]
+        for sys_ in s["systems"]:
+            flags = []
+            bars = sorted(sys_["bar_xs"])
+
+            # 1. slivers: a between-bars span far below M means one of its
+            # two bars is a stray — drop whichever removal best restores
+            # the width grid (border bars are never removed)
+            for _ in range(3):
+                bad = next((i for i in range(len(bars) - 1)
+                            if bars[i + 1] - bars[i] < 0.55 * M), None)
+                if bad is None:
+                    break
+                cand = [b for b in (bars[bad], bars[bad + 1])
+                        if 0.02 * W < b < 0.98 * W]
+                if not cand:
+                    break
+                drop = min(cand, key=lambda b: grid_err([x for x in bars if x != b]))
+                bars.remove(drop)
+                flags.append((drop, "removed"))
+
+            # 2. multiples of M: a span ≈ k·M hides k-1 missed bars. Place
+            # each at a stitched single-sighting candidate on the grid, or
+            # failing that in the widest note-free gap near the target
+            occupied = sorted((g["bbox"][0] - 3, g["bbox"][0] + g["bbox"][2] + 3)
+                              for g in sys_["glyphs"])
+            singles = sys_.get("bar_singles", [])
+            new_bars = list(bars)
+            for b1, b2 in zip(bars, bars[1:]):
+                span = b2 - b1
+                k = round(span / M)
+                if k < 2 or abs(span / k - M) > 0.2 * M:
+                    if span > 1.5 * M:            # too wide, but not a clean
+                        flags.append(((b1 + b2) // 2, "suspect"))  # multiple
+                    continue
+                for i in range(1, k):
+                    target = b1 + i * span / k
+                    near = [x for x in singles if abs(x - target) < 0.3 * M]
+                    if near:
+                        x = min(near, key=lambda v: abs(v - target))
+                    else:
+                        x = _free_gap_near(occupied, target, 0.35 * M, b1, b2)
+                    if x is None:
+                        flags.append((int(target), "suspect"))
+                    else:
+                        new_bars.append(int(x))
+                        flags.append((int(x), "added"))
+            sys_["bar_xs"] = sorted(new_bars)
+            sys_["bar_flags"] = flags
+
+
+def _free_gap_near(occupied, target, radius, lo, hi):
+    """Center of the widest note-free x-gap within radius of target,
+    strictly inside (lo, hi). None if every gap is glyph ink."""
+    merged = []            # chord digits share x — merge overlapping spans
+    for a, b in occupied:
+        if merged and a <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], b)
+        else:
+            merged.append([a, b])
+    edges = [lo] + [e for iv in merged for e in iv] + [hi]
+    best = None
+    for a, b in zip(edges[::2], edges[1::2]):  # (gap start, gap end) pairs
+        a2, b2 = max(a, lo + 4), min(b, hi - 4)
+        if b2 - a2 < 6:
+            continue
+        c = (a2 + b2) / 2
+        # the gap must reach near the target to count
+        if abs(c - target) > radius and not (a2 - radius < target < b2 + radius):
+            continue
+        score = (b2 - a2) - 0.5 * abs(c - target)
+        if best is None or score > best[0]:
+            best = (score, min(max(target, a2 + 3), b2 - 3))
+    return best[1] if best else None
 
 
 # ---------------------------------------------------------------- assemble measures
@@ -610,7 +757,9 @@ def attach_connectors(glyphs, gap):
 
 def build_measures(system, width):
     """Glyphs of one system -> ordered note events, split into measures at bar
-    lines. Chord = glyphs at (nearly) the same x. Requires digits assigned."""
+    lines. Chord = glyphs at (nearly) the same x. Requires digits assigned.
+    Measures touching a repaired/suspect boundary (sys bar_flags) carry
+    "boundary"/"suspect" so QA pages and the app can point at them."""
     gap = system["gap"]
     inner_bars = [b for b in system["bar_xs"] if 0.02 * width < b < 0.98 * width]
     boundaries = sorted(inner_bars) + [width + 1]
@@ -630,7 +779,46 @@ def build_measures(system, width):
                  for g in group]
         measures[mi]["notes"].append(notes[0] if len(notes) == 1 else {"chord": notes})
         i += 1
+
+    for x, kind in system.get("bar_flags", []):
+        for mi, right in enumerate(boundaries):
+            left = boundaries[mi - 1] if mi else 0
+            if left - 2 <= x <= right + 2:
+                measures[mi]["suspect"] = True
+                if kind != "suspect":
+                    measures[mi]["boundary"] = kind
     return [m for m in measures if m["notes"]]
+
+
+def flag_repeats(song):
+    """A tutorial often loops its section, and the stitcher then keeps two
+    copies. Flag (never delete) any run of 2+ measures that repeats an
+    earlier run nearly note-for-note; the app shows the hint, the human
+    decides whether to drop the second pass."""
+    from collections import Counter
+
+    def bag(m):
+        return Counter((n["string"], n["fret"])
+                       for ev in m["notes"]
+                       for n in (ev["chord"] if "chord" in ev else [ev]))
+
+    def sim(a, b):
+        union = sum((a | b).values())
+        return sum((a & b).values()) / union if union else 1.0
+
+    bags = [bag(m) for m in song]
+    n = len(song)
+    for j in range(1, n):
+        if "repeat_of" in song[j]:
+            continue
+        for i in range(j):
+            L = 0
+            while j + L < n and i + L < j and sim(bags[i + L], bags[j + L]) >= 0.8:
+                L += 1
+            if L >= 2:
+                for t in range(L):
+                    song[j + t].setdefault("repeat_of", i + t)
+                break
 
 
 # ---------------------------------------------------------------- main
@@ -787,6 +975,14 @@ def main():
     # now that clutter is gone and digits are named, spot duplicate pages
     sections = merge_duplicate_neighbors(sections)
 
+    sanitize_bars(sections)
+    for si, s in enumerate(sections, 1):
+        for sys_ in s["systems"]:
+            for x, kind in sys_.get("bar_flags", []):
+                word = {"added": "added a missing bar", "removed": "removed a stray bar",
+                        "suspect": "measure width looks wrong, could not fix"}[kind]
+                print(f"      page {si}: {word} at x={x} — VERIFY on the annotated image")
+
     from m1_spike import render_ascii  # noqa: E402
     song, page_dump = [], []
     for i, s in enumerate(sections, 1):
@@ -803,6 +999,12 @@ def main():
             "dup_counts": s.get("dup_counts", []),
             "annotated": f"page_{i}_annotated.png",
         })
+
+    flag_repeats(song)
+    reps_flagged = [i + 1 for i, m in enumerate(song) if "repeat_of" in m]
+    if reps_flagged:
+        print(f"      measures {reps_flagged} look like a repeat of earlier ones "
+              "(tutorials often loop) — flagged, kept")
 
     out = {"pages": page_dump, "measures": song,
            "clusters": {i: digits.get(i, "?") for i in range(len(reps))}}

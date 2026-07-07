@@ -250,14 +250,6 @@
       "notes": [
         {
           "string": 6,
-          "fret": 2
-        }
-      ]
-    },
-    {
-      "notes": [
-        {
-          "string": 6,
           "fret": 0
         },
         {
@@ -280,7 +272,9 @@
           "string": 3,
           "fret": 5
         }
-      ]
+      ],
+      "suspect": true,
+      "boundary": "removed"
     },
     {
       "notes": [
