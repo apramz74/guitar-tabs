@@ -51,6 +51,7 @@ def main():
     ap.add_argument("--source", default="", help="link or filename the song came from")
     ap.add_argument("--tuning", default="EADGBE")
     ap.add_argument("--capo", type=int, default=0)
+    ap.add_argument("--time-sig", default="", help='e.g. "4/4"; display-only metadata')
     ap.add_argument("--qa", choices=["verified", "draft"], default="draft",
                     help="'verified' only after human QA against source frames")
     args = ap.parse_args()
@@ -62,6 +63,7 @@ def main():
         "source": args.source,
         "tuning": args.tuning,
         "capo": args.capo,
+        **({"time_signature": args.time_sig} if args.time_sig else {}),
         "qa": args.qa,
         "measures": extraction["measures"],
     }

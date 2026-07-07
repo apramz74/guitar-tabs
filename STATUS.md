@@ -11,9 +11,9 @@ into tab data:
 
 | Video | Style | Result |
 |---|---|---|
-| Cannock Chase (IG Reel) | white tab strip, page flips, each page shown twice | 4 pages, 8 measures — user-QA'd ✓ |
-| Capo-6 song (tab app) | full-screen white app, scroll-jumps, clutter (clef, rests, time sig) | 2 pages, 4 measures |
-| Redbone (IG Reel) | white-on-black overlay, jump-scrolls sideways, legato notation | 1 stitched page, 5 measures — QA pending |
+| Cannock Chase (IG Reel) | white tab strip, page flips, each page shown twice | 4 pages, 8 even measures (junk note + doubled bar fixed 2026-07-06) |
+| Capo-6 song (tab app) | full-screen white app, scroll-jumps, clutter (clef, rests, time sig) | 2 pages, 4 measures — dense ones are real 16th-note picking, correct |
+| Redbone (IG Reel) | white-on-black overlay, jump-scrolls sideways, legato notation | 1 stitched page, 8 measures (3 missed bars recovered 2026-07-06) — QA pending |
 
 **How it works, in one paragraph:** sample the video ~2×/second; find the tab
 on each frame by its six evenly spaced lines (any color scheme); measure every
@@ -41,8 +41,10 @@ rests, text, rhythm marks).
 
 ## Working label sets (so we don't re-derive them)
 
-- Video 1 `ScreenRecording_07-03-2026 17-10-24_1.MP4`:
-  `0=0 1=5 2=5 3=0 4=4 5=3 6=0 7=2 8=x 9=0`
+- Video 1 `ScreenRecording_07-03-2026 17-10-24_1.MP4` (re-labeled
+  2026-07-06: the border fix dropped a background junk glyph that was a
+  cluster of its own, so indices shifted — old set is stale):
+  `0=0 1=5 2=5 3=0 4=4 5=3 6=0 7=x 8=0`
 - Video 2 `ScreenRecording_07-03-2026 18-15-36_1.MP4`:
   `0=x 1=0 2=8 3=7 4=x 5=5 6=3 7=1 8=2 9=x 10=x 11=4`
 - Video 3 `ScreenRecording_07-03-2026 23-12-48_1.MP4` (re-labeled 2026-07-04
@@ -75,6 +77,31 @@ flashcards if the code changed.)
   step strips line rows from wide hollow rejects and keeps the arc crown.
   Redbone now shows `6h8` in measures 1 and 4 (matches the video's "H"
   marks); videos 1 and 2 re-ran byte-identical; QA page updated.
+
+## Done 2026-07-06 (evening) — "Piece C": consistent measures + metadata
+
+- **Bar-line sanity pass** (`sanitize_bars`): measures in one video are
+  drawn near-uniform in width, so width outliers reveal bar mistakes.
+  Stitched bars seen only once are kept if they fit the width grid; a
+  bar carving a sliver is removed; clean-multiple spans get bars added
+  in note-free gaps. All repairs flagged (measure `suspect`/`boundary`),
+  printed, and drawn in color on overlays. `flag_repeats` marks measure
+  runs duplicating earlier ones (`repeat_of`) — flagged, never deleted.
+- **Border fix:** a bar is a border when the string lines stop beyond it
+  (was: only near frame edge) — kills background-scene junk glyphs.
+- **Results (verified by eye + note-for-note):** Cannock 9→8 even
+  measures (one junk note gone, labels shifted, see above); Redbone 5→8
+  measures with repeat pass flagged; Capo-6 untouched — its 16-event
+  measures are genuine 16th-note picking. NOTE: a time signature was
+  NOT needed for any of this; events ≠ beats without rhythm data.
+- **App:** ⚠ check / repeat? markers on flagged measures; measure sheet
+  gains Merge-with-next, Split (tap where the bar belongs), Looks right
+  (clears flags); Song info dialog (title/artist/capo/tuning/time sig)
+  replaces Rename. All click-tested against the mock API.
+- **`pipeline/read_metadata.py`:** one Gemini call reads on-screen text
+  (title/artist/capo/tuning/time-sig) and prints save_song flags for
+  human confirmation; `save_song.py --time-sig` added. Tested: found
+  "Capo 6" on video 2 and "Redbone / Childish Gambino" on video 3.
 
 ## Next steps, in priority order
 
@@ -116,9 +143,9 @@ flashcards if the code changed.)
 4. **Capo / tuning capture** (user deferred): "Capo 2", "Capo 6", "Standard
    Tuning" are on screen; read them into song metadata. Vision AI on a text
    crop is acceptable here (it's text, and human-verifiable).
-5. **Small opens:** video-1 run now reports 9 measures (was 8 — likely one
-   measure split by a stray bar); the 5/6 pair has both a slide and an arc in
-   the video but we keep only the slide mark.
+5. **Small opens:** the 5/6 pair has both a slide and an arc in the
+   video but we keep only the slide mark. (The video-1 9-vs-8 split was
+   fixed 2026-07-06 by the bar sanity pass.)
 
 ## Deferred / not started
 

@@ -38,8 +38,9 @@ const state = {
   editMode: false,
   sel: null,          // {m, e, n} measure/event/note indices
   barSel: null,       // measure index whose bar was tapped (measure ops)
+  splitFrom: null,    // measure index being split (tap a slot to place the bar)
   menuOpen: false,
-  renameOpen: false,
+  infoOpen: false,
   settingsOpen: false,
 };
 
@@ -208,8 +209,8 @@ window.addEventListener("hashchange", route);
 window.addEventListener("resize", debounce(() => { if (state.file) render(); }, 150));
 
 async function route() {
-  state.menuOpen = false; state.renameOpen = false; state.settingsOpen = false;
-  state.sel = null; state.barSel = null; state.editMode = false;
+  state.menuOpen = false; state.infoOpen = false; state.settingsOpen = false;
+  state.sel = null; state.barSel = null; state.splitFrom = null; state.editMode = false;
   const m = location.hash.match(/^#\/s\/(.+)$/);
   state.file = m ? decodeURIComponent(m[1]) : null;
   try {
@@ -294,8 +295,8 @@ function renderSong() {
   document.title = song.title;
   const view = el("div", { class: "songview" });
 
-  const sub = [song.tuning || "EADGBE", song.capo ? `capo ${song.capo}` : null]
-    .filter(Boolean).join(" · ");
+  const sub = [song.tuning || "EADGBE", song.capo ? `capo ${song.capo}` : null,
+    song.time_signature || null].filter(Boolean).join(" · ");
   view.append(el("div", { class: "topbar" },
     el("button", { class: "icon-btn", "aria-label": "Back to library", onclick: () => { location.hash = ""; } }, "‹"),
     el("div", { class: "t-title" }, song.title, el("span", { class: "t-sub" }, sub)),
@@ -322,7 +323,7 @@ function renderSong() {
       el("button", {
         class: "tb-btn", "aria-pressed": String(state.editMode),
         onclick: () => {
-          state.editMode = !state.editMode; state.sel = null; state.barSel = null; render();
+          state.editMode = !state.editMode; state.sel = null; state.barSel = null; state.splitFrom = null; render();
           if (state.editMode) toast("Tap a note to edit, a + to add");
         },
       }, state.editMode ? "Done" : "Edit"),
@@ -330,7 +331,7 @@ function renderSong() {
   }
 
   if (state.menuOpen) app.append(renderMenu(song));
-  if (state.renameOpen) app.append(renderRename(song));
+  if (state.infoOpen) app.append(renderSongInfo(song));
 }
 
 function bumpFont(d) {
@@ -406,6 +407,7 @@ function drawTab(container, song) {
   if (tuning.length === 6) tuning[0] = tuning[0].toLowerCase();
 
   container.innerHTML = "";
+  const markedMeasures = new Set();
   lines.forEach(lineCols => {
     const svg = elNS("svg", { class: "tabline", viewBox: `0 0 ${W} ${H}` });
     for (let s = 1; s <= 6; s++) {
@@ -433,10 +435,38 @@ function drawTab(container, song) {
           svg.append(elNS("rect", {
             x: c.x, y: yOf(s) - 0.7 * fs, width: c.w, height: 1.4 * fs, class: "hit slot-hit",
             "data-m": c.m, "data-at": c.at, "data-s": s,
-            onclick: () => editSong((song2) => insertNoteAt(song2, c.m, c.at, s)),
+            onclick: () => {
+              if (state.splitFrom !== null) {       // split mode: place the bar here
+                if (state.splitFrom === c.m && c.at > 0 && c.at < song.measures[c.m].notes.length) {
+                  editSong(song2 => splitMeasure(song2, c.m, c.at));
+                } else {
+                  toast(`Tap between two notes of measure ${state.splitFrom + 1}`);
+                }
+                return;
+              }
+              editSong(song2 => insertNoteAt(song2, c.m, c.at, s));
+            },
           }));
         }
         continue;
+      }
+      if (!markedMeasures.has(c.m)) {    // flag markers above a measure's first notes
+        const meas = song.measures[c.m];
+        const flagged = meas && (meas.suspect || meas.boundary);
+        const isRep = meas && "repeat_of" in meas;
+        if (flagged || isRep) {
+          markedMeasures.add(c.m);
+          svg.append(elNS("text", {
+            x: c.x + 2, y: 0.5 * fs, "font-size": 0.55 * fs,
+            class: flagged ? "m-flag" : "m-flag rep",
+          }, flagged ? "⚠ check" : "repeat?"));
+          if (state.editMode) {
+            svg.append(elNS("rect", {
+              x: c.x - 4, y: 0, width: 3.2 * fs, height: fs, class: "hit flag-hit", "data-m": c.m,
+              onclick: () => { state.barSel = c.m; state.sel = null; render(); },
+            }));
+          }
+        }
       }
       const taken = new Set(c.notes.map(n => n.string));
       if (state.editMode) {              // chord-building: empty strings of an event
@@ -597,21 +627,65 @@ function addChordNote(song, m, e, string) {
 
 function renderMeasureSheet(song) {
   const m = state.barSel;
-  if (m === null || !song.measures[m]) { state.barSel = null; return el("span"); }
+  const meas = song.measures[m];
+  if (m === null || !meas) { state.barSel = null; return el("span"); }
+  const flagged = meas.suspect || meas.boundary;
+  const why = meas.boundary === "added" ? "The pipeline added a bar line at this measure — check it against the video."
+    : meas.boundary === "removed" ? "The pipeline removed a bar line here — check it against the video."
+    : meas.suspect ? "This measure's width looks unusual — check it against the video."
+    : null;
   return el("div", { class: "sheet", role: "dialog", "aria-label": "Measure" },
     el("h3", {}, `Measure ${m + 1} of ${song.measures.length}`),
+    why ? el("p", { class: "sheet-hint" }, why) : null,
+    "repeat_of" in meas ? el("p", { class: "sheet-hint" },
+      `Looks like a repeat of measure ${meas.repeat_of + 1} — tutorials often loop. Delete it if you only want one pass.`) : null,
+    el("div", { class: "actions" },
+      el("button", {
+        onclick: () => editSong(s => mergeWithNext(s, m)),
+        disabled: m + 1 >= song.measures.length,
+      }, "Merge with next"),
+      el("button", {
+        onclick: () => {
+          state.barSel = null; state.splitFrom = m; render();
+          toast(`Tap the spot in measure ${m + 1} where the bar belongs`);
+        },
+      }, "Split…")),
     el("div", { class: "actions" },
       el("button", {
         class: "danger",
         onclick: () => {
-          if (confirm(`Delete measure ${m + 1} and its ${song.measures[m].notes.length} event(s)?`)) {
+          if (confirm(`Delete measure ${m + 1} and its ${meas.notes.length} event(s)?`)) {
             editSong(s => { s.measures.splice(m, 1); state.barSel = null; });
           }
         },
       }, "Delete measure"),
-      el("button", { onclick: () => editSong(s => { s.measures.splice(m + 1, 0, { notes: [] }); state.barSel = m + 1; }) }, "＋ Measure after"),
+      el("button", { onclick: () => editSong(s => { s.measures.splice(m + 1, 0, { notes: [] }); state.barSel = m + 1; }) }, "＋ Measure after")),
+    el("div", { class: "actions" },
+      flagged || "repeat_of" in meas ? el("button", {
+        onclick: () => editSong(s => {
+          ["suspect", "boundary", "repeat_of"].forEach(k => delete s.measures[m][k]);
+          state.barSel = null;
+        }),
+      }, "Looks right") : null,
       el("button", { class: "primary", onclick: () => { state.barSel = null; render(); } }, "Done")),
   );
+}
+
+function mergeWithNext(song, m) {
+  const nx = song.measures[m + 1];
+  if (!nx) return;
+  song.measures[m].notes.push(...nx.notes);
+  ["suspect", "boundary", "repeat_of"].forEach(k => delete song.measures[m][k]);
+  song.measures.splice(m + 1, 1);
+  state.barSel = null;
+}
+
+function splitMeasure(song, m, at) {
+  const meas = song.measures[m];
+  const right = meas.notes.splice(at);
+  ["suspect", "boundary"].forEach(k => delete meas[k]);
+  song.measures.splice(m + 1, 0, { notes: right });
+  state.splitFrom = null;
 }
 
 /* ---------------------------------------------------------------- menu, rename, settings */
@@ -622,7 +696,7 @@ function renderMenu(song) {
   frag.append(el("div", { class: "scrim", onclick: close }));
   frag.append(el("div", { class: "menu", role: "menu" },
     el("button", { onclick: () => { state.menuOpen = false; state.editMode = true; render(); toast("Tap a note to edit it"); } }, "Edit tab"),
-    el("button", { onclick: () => { state.menuOpen = false; state.renameOpen = true; render(); } }, "Rename…"),
+    el("button", { onclick: () => { state.menuOpen = false; state.infoOpen = true; render(); } }, "Song info…"),
     el("button", { onclick: () => { downloadSong(song); close(); } }, "Download JSON"),
     isDraft(state.file) && !ghCfg() ? el("button", {
       onclick: () => {
@@ -646,24 +720,37 @@ function renderMenu(song) {
   return frag;
 }
 
-function renderRename(song) {
-  const close = () => { state.renameOpen = false; render(); };
-  const input = el("input", { value: song.title, "aria-label": "Song title" });
+function renderSongInfo(song) {
+  const close = () => { state.infoOpen = false; render(); };
+  const title = el("input", { value: song.title, "aria-label": "Song title" });
+  const artist = el("input", { value: song.artist || "", "aria-label": "Artist" });
+  const capo = el("input", { value: song.capo || 0, type: "number", min: 0, max: 12, "aria-label": "Capo" });
+  const tuning = el("input", { value: song.tuning || "EADGBE", "aria-label": "Tuning", autocapitalize: "characters" });
+  const tsig = el("input", { value: song.time_signature || "", placeholder: "e.g. 4/4 (optional)", "aria-label": "Time signature" });
   const form = el("form", {},
-    el("h3", {}, "Rename song"),
-    input,
+    el("h3", {}, "Song info"),
+    el("label", {}, "Title", title),
+    el("label", {}, "Artist", artist),
+    el("label", {}, "Capo", capo),
+    el("label", {}, "Tuning", tuning),
+    el("label", {}, "Time signature", tsig),
     el("div", { class: "actions" },
       el("button", { type: "button", onclick: close }, "Cancel"),
-      el("button", { type: "submit", class: "primary" }, "Rename")));
+      el("button", { type: "submit", class: "primary" }, "Save")));
   form.addEventListener("submit", ev => {
     ev.preventDefault();
-    const t = input.value.trim();
-    if (t) { draftFor(state.file).title = t; persist(); scheduleSync(); }
-    close();
+    const d = draftFor(state.file);
+    if (title.value.trim()) d.title = title.value.trim();
+    d.artist = artist.value.trim();
+    d.capo = Math.max(0, parseInt(capo.value, 10) || 0);
+    d.tuning = (tuning.value.trim() || "EADGBE").toUpperCase();
+    if (tsig.value.trim()) d.time_signature = tsig.value.trim();
+    else delete d.time_signature;
+    persist(); scheduleSync(); close();
   });
   const dlg = el("div", { class: "dialog" }, form);
   dlg.addEventListener("click", ev => { if (ev.target === dlg) close(); });
-  queueMicrotask(() => input.select());
+  queueMicrotask(() => title.select());
   return dlg;
 }
 
@@ -748,9 +835,10 @@ function elNS(tag, attrs = {}, ...children) {
 }
 function applyAttrs(node, attrs) {
   for (const [k, v] of Object.entries(attrs)) {
+    if (v === undefined || v === null || v === false) continue;
     if (k.startsWith("on") && typeof v === "function") node.addEventListener(k.slice(2), v);
     else if (k === "class") { if (v) node.setAttribute("class", v); }
-    else node.setAttribute(k, v);
+    else node.setAttribute(k, v === true ? "" : v);
   }
 }
 function debounce(fn, ms) {
