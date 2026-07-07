@@ -370,6 +370,44 @@ def normalize_glyph(img):
     return cv2.resize(img, (20, 28), interpolation=cv2.INTER_AREA) > 127
 
 
+# filename-safe names for labels that contain shell/path characters
+LABEL_SLUGS = {"slide/": "slide-up", "slide\\": "slide-down",
+               "(": "paren-open", ")": "paren-close"}
+SLUG_LABELS = {v: k for k, v in LABEL_SLUGS.items()}
+
+
+def match_library(debug_dir, library_dir, max_dist=0.12):
+    """Prefill cluster labels by shape: compare this run's flashcards
+    (glyph_cluster_*.png, black ink on white) against the library of
+    previously human-confirmed glyphs. Returns {cluster_index: label}
+    for confident matches only — a human still confirms on screen."""
+    library = []
+    lib = Path(library_dir)
+    if lib.is_dir():
+        for p in sorted(lib.glob("*.png")):
+            slug = p.name.split("__")[0]
+            img = cv2.imread(str(p), cv2.IMREAD_GRAYSCALE)
+            if img is not None:
+                library.append((SLUG_LABELS.get(slug, slug), normalize_glyph(255 - img)))
+    if not library:
+        return {}
+    out = {}
+    for card in sorted(Path(debug_dir).glob("glyph_cluster_*.png")):
+        ci = int(card.stem.split("_")[-1])
+        img = cv2.imread(str(card), cv2.IMREAD_GRAYSCALE)
+        if img is None:
+            continue
+        norm = normalize_glyph(255 - img)
+        best, best_d = None, 1.0
+        for label, lnorm in library:
+            d = float(np.mean(norm != lnorm))
+            if d < best_d:
+                best, best_d = label, d
+        if best is not None and best_d <= max_dist:
+            out[ci] = best
+    return out
+
+
 def cluster_glyphs(all_glyphs, max_dist=0.12):
     """Group visually identical glyphs (same rendered font within a video).
     Returns cluster representative images; tags each glyph with cluster id.
@@ -830,6 +868,8 @@ def main():
     ap.add_argument("--ai", action="store_true", help="name digit clusters with one batched Gemini call")
     ap.add_argument("--label", action="append", default=[], metavar="CLUSTER=DIGIT",
                     help="verified digit for a cluster (e.g. --label 1=5); overrides AI")
+    ap.add_argument("--labels-json", help='JSON file {"0": "5", ...} of verified labels '
+                    "(same meaning as --label; --label flags win on conflict)")
     args = ap.parse_args()
     dbg = Path(args.debug_dir)
     dbg.mkdir(parents=True, exist_ok=True)
@@ -957,10 +997,13 @@ def main():
     else:
         print("[4/4] no AI naming (--ai not set)")
 
+    if args.labels_json:
+        for k, v in json.loads(Path(args.labels_json).read_text()).items():
+            digits[int(k)] = v
     for spec in args.label:  # human-verified labels always win
         k, v = spec.split("=")
         digits[int(k)] = v
-    if args.label:
+    if args.label or args.labels_json:
         print(f"      human labels applied: { {k: digits[k] for k in sorted(digits)} }")
 
     for s in sections:

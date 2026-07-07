@@ -103,6 +103,31 @@ flashcards if the code changed.)
   human confirmation; `save_song.py --time-sig` added. Tested: found
   "Capo 6" on video 2 and "Redbone / Childish Gambino" on video 3.
 
+## Done 2026-07-07 — video intake app (the last big M-piece)
+
+- **`pipeline/intake.py` + `pipeline/intake_ui/`** — local web app
+  (`.venv/bin/python pipeline/intake.py`, opens the browser): paste a
+  YouTube/Instagram link or drop a screen recording → extraction runs
+  with a live log → flashcards appear as a tap-to-name grid, prefilled
+  by shape from `pipeline/glyph_library/` → tab + overlays shown next
+  to the video with all flags → metadata (AI-read, human-confirmed) →
+  publish = save_song + git commit + push.
+- **Glyph library (label-by-shape — kills the relabel pain):** seeded
+  with all 39 confirmed shapes from the three videos; `match_library`
+  in extract_cv prefills any run; every publish adds newly confirmed
+  shapes. Verified: all three videos' flashcards prefill 100% correctly.
+- **Link spike:** YouTube downloads anonymously; Instagram works via
+  the user's Chrome login (user accepted the ToS-gray trade-offs,
+  2026-07-07); every download failure points at screen-recording.
+- **Verified:** IG link end-to-end in the real UI (download ✓, graceful
+  "no readable tab" dead-end — that reel's tiny overlay is a new
+  style); YouTube link likewise; publish plumbing with push off.
+  **Still to verify: the full happy path with video 1** — blocked
+  because macOS revoked this session's Downloads access mid-day.
+  Expected: labels fully prefilled, dry-run publish byte-identical to
+  committed cannock-chase.json; then the acceptance test is the user
+  adding a genuinely new song solo.
+
 ## Next steps, in priority order
 
 1. **User QA of Redbone** (waiting on user) — the 6-8 arc is now in; check

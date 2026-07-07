@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Add a song</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎸</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,650&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/ui/intake.css">
+</head>
+<body>
+<main id="app">
+  <header>
+    <h1>Add a song</h1>
+    <ol class="rail" id="rail">
+      <li data-step="1">Video</li><li data-step="2">Read</li><li data-step="3">Name shapes</li>
+      <li data-step="4">Check</li><li data-step="5">Publish</li>
+    </ol>
+  </header>
+
+  <section id="panel-start" class="panel">
+    <div class="card">
+      <h2>Paste a link</h2>
+      <p class="hint">YouTube works with nothing extra. Instagram uses your Chrome login —
+        if it fails, screen-record the reel and drop the file below.</p>
+      <form id="link-form" class="rowform">
+        <input id="link" type="url" placeholder="https://www.youtube.com/watch?v=… or instagram.com/reel/…">
+        <button type="submit" class="primary">Go</button>
+      </form>
+    </div>
+    <div class="card drop" id="drop">
+      <h2>…or drop a screen recording</h2>
+      <p class="hint">Drag a video file here, or</p>
+      <label class="filebtn"><input id="file" type="file" accept="video/*,.mp4,.mov,.mkv">choose a file</label>
+    </div>
+  </section>
+
+  <section id="panel-busy" class="panel hidden">
+    <div class="card">
+      <h2 id="busy-title">Working…</h2>
+      <pre id="log" class="log"></pre>
+    </div>
+  </section>
+
+  <section id="panel-notab" class="panel hidden">
+    <div class="card">
+      <h2>No tab found</h2>
+      <p class="hint" id="notab-msg"></p>
+      <img id="notab-frames" alt="what the pipeline saw" class="wide">
+      <button class="primary" onclick="location.reload()">Start over</button>
+    </div>
+  </section>
+
+  <section id="panel-label" class="panel hidden">
+    <div class="card">
+      <h2>Name each shape <span id="label-progress" class="chip"></span></h2>
+      <p class="hint">Dimmed cards were recognized from songs you've already added — glance and
+        correct if wrong. Highlighted cards need you. <b>x</b> means junk (not a note).</p>
+      <div id="cards" class="cards"></div>
+      <div class="rowform">
+        <button id="ask-ai">Ask AI to suggest</button>
+        <button id="build" class="primary">Build the tab →</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="panel-check" class="panel hidden">
+    <div class="card">
+      <h2>Does the tab match the video?</h2>
+      <div id="flags" class="hint"></div>
+      <div class="checkgrid">
+        <video id="video" controls preload="metadata"></video>
+        <div id="pages"></div>
+      </div>
+      <div class="rowform">
+        <button id="relabel">← Fix shape names</button>
+        <button id="to-publish" class="primary">Looks right →</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="panel-publish" class="panel hidden">
+    <div class="card narrow">
+      <h2>Publish</h2>
+      <label>Title <input id="m-title"></label>
+      <label>Artist <input id="m-artist"></label>
+      <label class="half">Capo <input id="m-capo" type="number" min="0" max="12" value="0"></label>
+      <label class="half">Tuning <input id="m-tuning" value="EADGBE"></label>
+      <label class="half">Time signature <input id="m-tsig" placeholder="e.g. 4/4 (optional)"></label>
+      <label class="checkline"><input id="m-push" type="checkbox" checked> Put it on the phone library (commit &amp; push)</label>
+      <button id="publish" class="primary">Publish</button>
+    </div>
+  </section>
+
+  <section id="panel-done" class="panel hidden">
+    <div class="card">
+      <h2>Done 🎸</h2>
+      <p class="hint" id="done-msg"></p>
+      <p><a id="done-link" target="_blank" class="biglink"></a></p>
+      <button class="primary" onclick="location.reload()">Add another song</button>
+    </div>
+  </section>
+
+  <section id="panel-error" class="panel hidden">
+    <div class="card">
+      <h2>That didn't work</h2>
+      <p class="hint" id="error-msg"></p>
+      <pre id="error-log" class="log"></pre>
+      <button class="primary" onclick="location.reload()">Start over</button>
+    </div>
+  </section>
+
+  <div id="pad" class="pad hidden"></div>
+</main>
+<script src="/ui/intake.js"></script>
+</body>
+</html>

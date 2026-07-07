@@ -45,6 +45,20 @@ Run it locally: `python3 -m http.server` from the repo root, then open
 
 ## Adding a song (runs on the Mac)
 
+The easy way — the intake app:
+
+```bash
+.venv/bin/python pipeline/intake.py
+```
+
+A page opens: paste a YouTube or Instagram link (IG uses your Chrome
+login) or drop a screen recording; extraction runs; you confirm the
+shape flashcards (mostly prefilled from shapes you've named before);
+check the tab against the video; publish. Done — it's on your phone in
+a minute.
+
+The manual way, step by step:
+
 1. **Screen-record the tutorial** (IG scraping is against ToS and
    fragile; a manual recording always works). Any style works: white tab
    strips with page flips, full-screen tab apps, dark overlays that

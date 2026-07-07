@@ -14,3 +14,6 @@ frames/
 
 # os
 .DS_Store
+
+# intake app working dirs
+.intake-runs/

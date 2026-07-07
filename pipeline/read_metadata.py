@@ -21,23 +21,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from m1_spike import call_gemini  # noqa: E402
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("video")
-    ap.add_argument("--frames", type=int, default=3, help="frames to sample")
-    args = ap.parse_args()
-
+def read(video, frames=3):
+    """One batched Gemini call over sampled frames -> metadata dict.
+    Values are whatever text is literally on screen; human confirms."""
     from google import genai
     from google.genai import types
     from dotenv import load_dotenv
     load_dotenv(Path(__file__).resolve().parent.parent / ".env")
     client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
-    cap = cv2.VideoCapture(args.video)
+    cap = cv2.VideoCapture(video)
     total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     parts = []
-    for f in range(args.frames):
-        cap.set(cv2.CAP_PROP_POS_FRAMES, int(total * (f + 0.5) / args.frames))
+    for f in range(frames):
+        cap.set(cv2.CAP_PROP_POS_FRAMES, int(total * (f + 0.5) / frames))
         ok, frame = cap.read()
         if not ok:
             continue
@@ -45,7 +42,7 @@ def main():
         parts.append(types.Part.from_bytes(data=jpg.tobytes(), mime_type="image/jpeg"))
     cap.release()
     if not parts:
-        sys.exit("could not read any frames")
+        raise RuntimeError("could not read any frames")
 
     parts.append(
         "These are frames from one guitar tutorial video. Report ONLY text that is "
@@ -56,7 +53,15 @@ def main():
     resp = call_gemini(client, parts)
     text = (resp.text or "").strip().strip("`")
     text = text[4:] if text.startswith("json") else text
-    meta = json.loads(text)
+    return json.loads(text)
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument("video")
+    ap.add_argument("--frames", type=int, default=3, help="frames to sample")
+    args = ap.parse_args()
+    meta = read(args.video, args.frames)
 
     print(json.dumps(meta, indent=2))
     print("\nVERIFY against the video, then save with e.g.:")
