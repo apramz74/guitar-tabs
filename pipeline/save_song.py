@@ -39,7 +39,7 @@ def rebuild_index():
         if s.get("archived"):
             entry["archived"] = True
         entries.append(entry)
-    (SONGS_DIR / "index.json").write_text(json.dumps(entries, indent=2))
+    (SONGS_DIR / "index.json").write_text(json.dumps(entries, indent=2) + "\n")
     return entries
 
 
@@ -68,7 +68,7 @@ def main():
 
     SONGS_DIR.mkdir(parents=True, exist_ok=True)
     out = SONGS_DIR / f"{slugify(args.title)}.json"
-    out.write_text(json.dumps(song, indent=2))
+    out.write_text(json.dumps(song, indent=2) + "\n")
     print(f"wrote {out} ({len(song['measures'])} measures, qa={args.qa})")
 
     entries = rebuild_index()
