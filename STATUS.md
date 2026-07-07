@@ -102,12 +102,12 @@ flashcards if the code changed.)
      events, measure ends, empty measures = insert). Bar-line tap opens
      measure ops (add measure after / delete measure). Emptied measures
      survive. All flows click-tested; data round-trips byte-identical.
-   **Blocked on user (one command):** the repo has no GitHub remote —
-   automation is not allowed to create one. User runs
-   `gh repo create guitar-tabs --public --source . --push` (or
-   --private; Pages then needs GitHub Pro), enables Pages, creates a
-   fine-grained PAT (Contents RW), pastes it into app Settings. Then
-   re-verify saves against the real repo.
+   **LIVE (2026-07-06):** user authorized the push; the site is at
+   https://apramz74.github.io/guitar-tabs/web/ (public repo
+   apramz74/guitar-tabs, Pages from main root). Real-repo saving
+   verified end-to-end from the live site (edit → commit → revert).
+   Remaining user setup: create a fine-grained PAT (Contents RW on just
+   this repo) and paste it into the app's Settings on the phone.
    - Video intake ("submit video for analysis"): still not built —
      next major piece, as a Mac-local import app wrapping the pipeline.
 3. **Label-by-shape** (kills the fragile cluster-index labels): store labeled
