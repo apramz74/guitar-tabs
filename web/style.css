@@ -138,6 +138,7 @@ button:focus-visible, a:focus-visible {
 .tabline .hit { fill: transparent; }
 .tabline .plus { fill: var(--brass); opacity: 0.5; }
 .tabline .plus.dim { opacity: 0.28; }
+.tabline .chord-name { fill: var(--brass); font-weight: 600; }
 .tabline .m-flag { fill: var(--brass); font-weight: 600; }
 .tabline .m-flag.rep { fill: var(--muted); font-weight: 400; }
 .sheet .sheet-hint { color: var(--muted); font-size: 13.5px; margin: -4px 0 12px; }

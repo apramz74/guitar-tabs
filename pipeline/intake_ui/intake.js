@@ -6,12 +6,13 @@ let padFor = null;       // cluster index the pad is editing
 let localLabels = {};    // cluster -> label, edited client-side until Build
 
 const $ = id => document.getElementById(id);
-const PANELS = ["start", "busy", "notab", "label", "check", "publish", "done", "error"];
+const PANELS = ["start", "busy", "notab", "label", "chords", "check", "publish", "done", "error"];
+let localChords = null;   // [{name, fr}] per diagram, edited client-side
 const PAD_KEYS = ["0","1","2","3","4","5","6","7","8","9","x","arc","slide/","slide\\","(",")","h","p"];
 
 function show(name) {
   PANELS.forEach(p => $("panel-" + p).classList.toggle("hidden", p !== name));
-  const stepOf = { start: 1, busy: 2, notab: 2, label: 3, check: 4, publish: 5, done: 5, error: 1 };
+  const stepOf = { start: 1, busy: 2, notab: 2, label: 3, chords: 3, check: 4, publish: 5, done: 5, error: 1 };
   document.querySelectorAll("#rail li").forEach(li => {
     const n = +li.dataset.step;
     li.classList.toggle("on", n === stepOf[name]);
@@ -102,6 +103,21 @@ function render() {
       renderCards(true);
     }
     show("label");
+  } else if (s === "chords") {
+    if (lastStep !== "chords") {
+      localChords = state.diagrams.map(() => ({ name: "", fr: "" }));
+      renderChordCards();
+    }
+    if (state.chord_suggestions && !renderChordCards.suggested) {
+      renderChordCards.suggested = true;
+      state.chord_suggestions.forEach((sug, i) => {
+        if (sug && localChords[i] && !localChords[i].name && !localChords[i].fr) {
+          localChords[i] = { name: sug.name || "", fr: sug.fr ?? "" };
+        }
+      });
+      renderChordCards();
+    }
+    show("chords");
   } else if (s === "check") {
     if (lastStep !== "check") renderCheck();
     show("check");
@@ -184,6 +200,84 @@ $("build").onclick = async () => {
   show("busy");
 };
 
+/* ---------------- chord mode ---------------- */
+
+// mirror of diagram_chord in extract_cv.py, for the live preview only —
+// the authoritative build happens in Python when you hit Build
+function previewFrets(d, fr, flip) {
+  const away = d.marks_side === "right";
+  const marks = Object.fromEntries(d.marks);
+  const out = ["x", "x", "x", "x", "x", "x"];   // physical strings, low E first
+  for (let si = 0; si < 6; si++) {
+    const phys = flip ? 5 - si : si;
+    const cols = d.dots.filter(([s]) => s === si).map(([, c]) => c);
+    if (cols.length) {
+      const col = away ? Math.max(...cols) : Math.min(...cols);
+      out[phys] = String(fr + (away ? d.ncols - 1 - col : col));
+    } else if (marks[si] === "o") {
+      out[phys] = "0";
+    }
+  }
+  return out.join(" ");
+}
+
+function renderChordCards() {
+  const wrap = $("chord-cards");
+  wrap.innerHTML = "";
+  const flip = $("flip-strings").checked;
+  let missing = 0;
+  state.diagrams.forEach((d, i) => {
+    const cur = localChords[i];
+    if (!cur.fr) missing++;
+    const card = document.createElement("div");
+    card.className = "ccard";
+    const frVal = parseInt(cur.fr, 10);
+    card.innerHTML = `
+      <img src="/api/runs/${runId}/file/debug/${d.crop}" alt="chord diagram ${i + 1}">
+      <div class="frets ${cur.fr ? "" : "bad"}">${cur.fr ? escapeHtml(previewFrets(d, frVal, flip)) : "Fr needed → ?"}</div>
+      <label>Name <input class="c-name" value="${escapeHtml(cur.name)}" placeholder="e.g. Bm7"></label>
+      <label>Fr (base fret) <input class="c-fr" type="number" min="1" max="24" value="${escapeHtml(String(cur.fr))}"></label>
+      <div class="sight">seen ${d.sightings}× at ${d.ts}s</div>`;
+    card.querySelector(".c-name").addEventListener("input", ev => { cur.name = ev.target.value; });
+    card.querySelector(".c-fr").addEventListener("input", ev => {
+      cur.fr = ev.target.value;
+      const v = parseInt(cur.fr, 10);
+      const el2 = card.querySelector(".frets");
+      el2.textContent = v >= 1 ? previewFrets(d, v, $("flip-strings").checked) : "Fr needed → ?";
+      el2.classList.toggle("bad", !(v >= 1));
+      $("chords-progress").textContent = progressText();
+    });
+    wrap.append(card);
+  });
+  $("chords-progress").textContent = progressText();
+  function progressText() {
+    const m = localChords.filter(c => !(parseInt(c.fr, 10) >= 1)).length;
+    return m ? `${m} still need a fret` : "all confirmed";
+  }
+}
+
+$("flip-strings").addEventListener("change", () => renderChordCards());
+
+$("chords-ai").onclick = async () => {
+  renderChordCards.suggested = false;
+  $("chords-ai").textContent = "Asking…";
+  await api(`/api/runs/${runId}/suggest`, { method: "POST" });
+};
+
+$("chords-build").onclick = async () => {
+  const bad = localChords.filter(c => !(parseInt(c.fr, 10) >= 1)).length;
+  if (bad) { alert(`${bad} diagram(s) still need their Fr number.`); return; }
+  await api(`/api/runs/${runId}/chords`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      frets: localChords.map(c => parseInt(c.fr, 10)),
+      names: localChords.map(c => c.name.trim()),
+      flip: $("flip-strings").checked,
+    }),
+  });
+  show("busy");
+};
+
 /* ---------------- check + publish ---------------- */
 
 function renderCheck() {
@@ -212,7 +306,8 @@ function renderCheck() {
 }
 
 $("relabel").onclick = async () => {
-  await api(`/api/runs/${runId}/back-to-labels`, { method: "POST" });
+  const back = state.mode === "chords" ? "back-to-chords" : "back-to-labels";
+  await api(`/api/runs/${runId}/${back}`, { method: "POST" });
   lastStep = null;
 };
 

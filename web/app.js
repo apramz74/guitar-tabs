@@ -361,7 +361,7 @@ function songColumns(song, withSlots) {
   song.measures.forEach((measure, m) => {
     measure.notes.forEach((event, e) => {
       if (withSlots) cols.push({ type: "slot", m, at: e });
-      cols.push({ type: "event", m, e, notes: notesOf(event) });
+      cols.push({ type: "event", m, e, notes: notesOf(event), name: event.name });
     });
     if (withSlots) cols.push({ type: "slot", m, at: measure.notes.length });
     cols.push({ type: "bar", m });
@@ -386,6 +386,8 @@ function drawTab(container, song) {
     c.w = Math.max(...c.notes.map(n => textWidth(noteLabel(n), fs))) + colGap;
     // a slide to the next note needs shoulder room for the slanted stroke
     if (c.notes.some(n => n.legato_next === "/" || n.legato_next === "\\")) c.w += 0.8 * fs;
+    // a chord name above the column must fit inside it
+    if (c.name) c.w = Math.max(c.w, textWidth(c.name, 0.6 * fs) + colGap);
   }
 
   // greedy flow into lines, preferring to break after a bar
@@ -456,8 +458,9 @@ function drawTab(container, song) {
         const isRep = meas && "repeat_of" in meas;
         if (flagged || isRep) {
           markedMeasures.add(c.m);
+          const yFlag = c.name ? H - 0.2 * fs : 0.5 * fs;  // names own the top
           svg.append(elNS("text", {
-            x: c.x + 2, y: 0.5 * fs, "font-size": 0.55 * fs,
+            x: c.x + 2, y: yFlag, "font-size": 0.55 * fs,
             class: flagged ? "m-flag" : "m-flag rep",
           }, flagged ? "⚠ check" : "repeat?"));
           if (state.editMode) {
@@ -467,6 +470,12 @@ function drawTab(container, song) {
             }));
           }
         }
+      }
+      if (c.name) {   // chord name (from chord-diagram videos) above the column
+        svg.append(elNS("text", {
+          x: c.cx, y: 0.55 * fs, "text-anchor": "middle",
+          class: "chord-name", "font-size": 0.6 * fs,
+        }, c.name));
       }
       const taken = new Set(c.notes.map(n => n.string));
       if (state.editMode) {              // chord-building: empty strings of an event

@@ -46,6 +46,7 @@ def new_run():
     d.mkdir(parents=True, exist_ok=True)
     runs[rid] = {"id": rid, "dir": str(d), "step": "starting", "log": [],
                  "error": None, "clusters": 0, "prefill": {}, "labels": {},
+                 "mode": "tab", "diagrams": [], "chord_suggestions": None,
                  "pages": [], "flags": [], "meta": None, "published": None}
     return runs[rid]
 
@@ -130,13 +131,23 @@ def do_extract(run):
         run["error"] = "Extraction failed — see the log above."
         return
 
+    ext = json.loads((debug / "extraction.json").read_text())
+    if ext.get("mode") == "chords" and ext.get("diagrams"):
+        run["mode"] = "chords"
+        run["diagrams"] = ext["diagrams"]
+        run["step"] = "chords"
+        log(run, f"{len(ext['diagrams'])} chord diagrams found — confirm each name "
+                 "and base fret (the little 'Fr N' under the grid)")
+        return
+
     cards = sorted(debug.glob("glyph_cluster_*.png"))
     if not cards:
         _frames_sheet(video, Path(run["dir"]) / "frames.png")
         run["step"] = "notab"
-        run["error"] = ("Couldn't find a readable tab in this video. Either it has no "
-                        "on-screen tab, or it's a style the pipeline doesn't know yet. "
-                        "Here's what the video looks like to the pipeline:")
+        run["error"] = ("Couldn't find a readable tab or chord diagrams in this video. "
+                        "Either it has no on-screen notation, or it's a style the "
+                        "pipeline doesn't know yet. Here's what it looks like to the "
+                        "pipeline:")
         return
 
     run["clusters"] = len(cards)
@@ -164,15 +175,13 @@ def _frames_sheet(video, out):
 
 # ---------------------------------------------------------------- label -> check
 
-def do_build(run):
+def _rebuild(run, extra_args, what):
     run["step"] = "build"
     debug = Path(run["dir"]) / "debug"
-    labels_file = debug / "labels.json"
-    labels_file.write_text(json.dumps(run["labels"]))
-    log(run, "building the tab with your labels …")
+    log(run, f"building the tab with your {what} …")
     video = Path(run["dir"]) / run["video"]
     p = subprocess.Popen([PY, str(PIPE / "extract_cv.py"), str(video),
-                          "--debug-dir", str(debug), "--labels-json", str(labels_file)],
+                          "--debug-dir", str(debug)] + extra_args,
                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     for line in p.stdout:
         line = line.rstrip()
@@ -181,8 +190,17 @@ def do_build(run):
     if p.wait() != 0:
         run["step"] = "error"
         run["error"] = "Tab build failed — see the log above."
+        return None
+    return json.loads((debug / "extraction.json").read_text())
+
+
+def do_build(run):
+    debug = Path(run["dir"]) / "debug"
+    labels_file = debug / "labels.json"
+    labels_file.write_text(json.dumps(run["labels"]))
+    ext = _rebuild(run, ["--labels-json", str(labels_file)], "labels")
+    if ext is None:
         return
-    ext = json.loads((debug / "extraction.json").read_text())
     run["pages"] = [{"ascii": p["ascii"], "annotated": p["annotated"]} for p in ext["pages"]]
     run["flags"] = [
         {"measure": i + 1,
@@ -195,6 +213,57 @@ def do_build(run):
     run["step"] = "check"
     if run["meta"] is None:
         background(do_metadata, run)
+
+
+def do_build_chords(run, frets, names, flip):
+    args = ["--frets", ",".join(str(f) for f in frets),
+            "--names", ",".join(names)]
+    if flip:
+        args.append("--flip-strings")
+    ext = _rebuild(run, args, "chords")
+    if ext is None:
+        return
+    run["diagrams"] = ext.get("diagrams", [])
+    run["pages"] = [{"ascii": p["ascii"], "annotated": p["annotated"]} for p in ext["pages"]]
+    run["flags"] = [
+        {"measure": i + 1,
+         **({"suspect": True} if m.get("suspect") else {}),
+         **({"repeat_of": m["repeat_of"] + 1} if "repeat_of" in m else {})}
+        for i, m in enumerate(ext["measures"])
+        if m.get("suspect") or "repeat_of" in m]
+    run["measure_count"] = len(ext["measures"])
+    run["step"] = "check"
+    if run["meta"] is None:
+        background(do_metadata, run)
+
+
+def do_suggest_chords(run):
+    """One Gemini call over the name + fret crops; suggestions only."""
+    from m1_spike import call_gemini
+    from google import genai
+    from google.genai import types
+    from dotenv import load_dotenv
+    import os
+    load_dotenv(ROOT / ".env")
+    client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
+    debug = Path(run["dir"]) / "debug"
+    parts = []
+    for d in run["diagrams"]:
+        for crop in (d["name_crop"], d["fret_crop"]):
+            f = debug / crop
+            if f.is_file():
+                parts.append(types.Part.from_bytes(data=f.read_bytes(), mime_type="image/png"))
+    n = len(run["diagrams"])
+    parts.append(
+        f"These are {2 * n} images: for each of {n} chord diagrams, first its chord NAME "
+        "(e.g. Bm7, C#m/E), then its base-fret label (e.g. 'Fr 7'). Report ONLY the text "
+        "you see. Respond with ONLY a JSON list of " + str(n) + " objects like "
+        '[{"name": "Bm7", "fr": 7}, ...], null for anything unreadable.')
+    resp = call_gemini(client, parts)
+    text = (resp.text or "").strip().strip("`")
+    text = text[4:] if text.startswith("json") else text
+    run["chord_suggestions"] = json.loads(text)
+    log(run, "AI read the names and frets — every one still needs your confirmation")
 
 
 def do_metadata(run):
@@ -346,7 +415,26 @@ def set_labels(rid):
 
 @app.post("/api/runs/<rid>/suggest")
 def suggest(rid):
-    background(do_suggest, runs[rid])
+    run = runs[rid]
+    background(do_suggest_chords if run.get("mode") == "chords" else do_suggest, run)
+    return jsonify({"ok": True})
+
+
+@app.post("/api/runs/<rid>/chords")
+def build_chords(rid):
+    body = request.get_json() or {}
+    frets = [int(f) for f in body.get("frets", [])]
+    names = [str(n) for n in body.get("names", [])]
+    run = runs[rid]
+    if len(frets) != len(run.get("diagrams", [])):
+        return jsonify({"error": "one base fret per diagram required"}), 400
+    background(do_build_chords, run, frets, names, bool(body.get("flip")))
+    return jsonify({"ok": True})
+
+
+@app.post("/api/runs/<rid>/back-to-chords")
+def back_to_chords(rid):
+    runs[rid]["step"] = "chords"
     return jsonify({"ok": True})
 
 

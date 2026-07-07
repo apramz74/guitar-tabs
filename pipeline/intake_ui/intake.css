@@ -89,6 +89,19 @@ label.checkline input { width: 18px; height: 18px; margin: 0; padding: 0; flex: 
 .pad button { padding: 10px 0; font-family: "IBM Plex Mono", monospace; }
 .pad button.wide2 { grid-column: span 2; }
 
+.chordcards .ccard {
+  width: 220px; padding: 12px; background: var(--panel-2);
+  border: 1px solid var(--line); border-radius: 10px;
+}
+.chordcards .ccard img { width: 100%; background: #000; border-radius: 6px; }
+.chordcards .ccard .frets {
+  font: 600 15px/1 "IBM Plex Mono", monospace; color: var(--brass);
+  text-align: center; margin: 8px 0 2px; letter-spacing: 0.05em;
+}
+.chordcards .ccard .frets.bad { color: var(--danger); }
+.chordcards .ccard label { margin: 6px 0 0; }
+.chordcards .ccard .sight { font-size: 11px; color: var(--muted); text-align: right; }
+
 .checkgrid { display: grid; grid-template-columns: 300px 1fr; gap: 16px; margin: 14px 0; }
 @media (max-width: 760px) { .checkgrid { grid-template-columns: 1fr; } }
 .checkgrid video { width: 100%; border-radius: 8px; background: #000; }

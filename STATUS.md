@@ -131,6 +131,26 @@ flashcards if the code changed.)
   e.g. instagram reel DVpdgiozJPW) — no tab on screen, correctly
   dead-ends; SUPPORT NOT BUILT YET, natural next piece.
 
+## Done 2026-07-07 (later) — chord-diagram videos (style D)
+
+- The user's own reel (Bm7/E7/Amaj7 progression, IG DVpdgiozJPW) now
+  imports end to end. `find_chord_diagrams` in extract_cv measures the
+  grid/dots/x-o marks deterministically; names + "Fr" base frets are
+  AI-read and human-confirmed in the intake wizard's new Confirm-chords
+  step; `--frets/--names/--flip-strings` flags rebuild, mirroring the
+  labels flow. Output = one chord per measure with `"name"` on the
+  event; the viewer draws names above the chords.
+- Convention PROVEN against the reel (all 9 named chords musically
+  correct, incl. the outro Bm(maj7)/F# we almost mistook for junk):
+  top row = LOW E, marks sit at the nut side, frets grow away from the
+  marks, "Fr" names the column nearest the marks. `--flip-strings`
+  covers videos drawn the other way.
+- Verified: reel end to end through the wizard (AI read all 9 names +
+  frets correctly on first try; human confirm still required); all
+  three tab videos re-ran byte-identical; the unsupported YouTube
+  bottom-strip style still dead-ends gracefully (no chord-mode
+  misfire); phone rendering checked at 390px.
+
 ## Next steps, in priority order
 
 1. **User QA of Redbone** (waiting on user) — the 6-8 arc is now in; check

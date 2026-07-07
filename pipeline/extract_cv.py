@@ -828,6 +828,61 @@ def build_measures(system, width):
     return [m for m in measures if m["notes"]]
 
 
+def chord_mode(args, dbg):
+    """Style D: no tab found — look for chord diagrams instead. Returns
+    True if diagrams were found and extraction.json written."""
+    print("      no tab strips — looking for chord diagrams instead ...")
+    diagrams = find_chord_diagrams(args.video)
+    if not diagrams:
+        print("      no chord diagrams either")
+        return False
+    med = float(np.median([d["sightings"] for d in diagrams]))
+    frets = [int(x) for x in args.frets.split(",")] if args.frets else []
+    names = [n.strip() for n in args.names.split(",")] if args.names else []
+    if frets and len(frets) != len(diagrams):
+        print(f"      WARNING: {len(frets)} base frets given for {len(diagrams)} diagrams — ignoring")
+        frets = []
+    if not frets:
+        print("      base frets NOT confirmed yet — using 1 as a placeholder; "
+              "every measure is flagged until the intake app confirms them")
+
+    song, meta = [], []
+    from m1_spike import render_ascii  # noqa: E402
+    for i, d in enumerate(diagrams, 1):
+        diagram_crops(d, dbg, i)
+        fr = frets[i - 1] if frets else 1
+        notes = diagram_chord(d["sig"], fr, args.flip_strings)
+        name = names[i - 1] if i <= len(names) else ""
+        event = {"chord": notes} if len(notes) > 1 else (dict(notes[0]) if notes else None)
+        measure = {"notes": [event] if event else []}
+        if event and name:
+            event["name"] = name
+        if not frets or d["sightings"] < 0.5 * med or not notes:
+            measure["suspect"] = True
+        song.append(measure)
+        meta.append({"i": i, "ts": round(d["ts"], 1), "sightings": d["sightings"],
+                     "dots": sorted(d["sig"]["dots"]), "marks": list(d["sig"]["marks"]),
+                     "marks_side": d["sig"]["marks_side"], "ncols": d["sig"]["ncols"],
+                     "crop": f"diagram_{i}.png", "name_crop": f"diagram_{i}_name.png",
+                     "fret_crop": f"diagram_{i}_fret.png",
+                     "annotated": f"diagram_{i}_annotated.png"})
+        print(f"      chord {i} @ {d['ts']:5.1f}s ({d['sightings']} sightings): "
+              f"{name or '(name unconfirmed)'} — "
+              f"{' '.join(str(n['fret']) for n in sorted(notes, key=lambda n: -n['string'])) or 'no notes?'}")
+
+    flag_repeats(song)
+    ascii_tab = render_ascii(song)
+    out = {"mode": "chords", "diagrams": meta, "measures": song,
+           "pages": [{"page": 1, "ts": diagrams[0]["ts"], "measures": song,
+                      "ascii": ascii_tab, "annotated": "diagram_1_annotated.png"}],
+           "clusters": {}}
+    (dbg / "extraction.json").write_text(json.dumps(out, indent=2))
+    print(f"\n{len(song)} chords -> {dbg / 'extraction.json'}")
+    print(ascii_tab)
+    print(f"\ndiagram crops + annotated overlays in {dbg}/ — verify visually.")
+    return True
+
+
 def flag_repeats(song):
     """A tutorial often loops its section, and the stitcher then keeps two
     copies. Flag (never delete) any run of 2+ measures that repeats an
@@ -859,6 +914,197 @@ def flag_repeats(song):
                 break
 
 
+# ---------------------------------------------------------------- chord diagrams (style D)
+#
+# Some videos teach with chord DIAGRAMS instead of tab: a small white
+# grid per chord (strings drawn as 6 horizontal lines, frets as short
+# vertical lines), finger dots, x/o marks at the nut side, a chord name
+# above and a base-fret label ("Fr 7") below. Geometry is measured; the
+# name and base fret are text a human confirms in the intake app.
+# Convention verified against a real reel (all named chords check out
+# musically): top row = LOW E, marks sit at the nut side, and frets
+# grow AWAY from the marks column; the Fr label names the column
+# nearest the marks... i.e. with marks on the right, fret(col) =
+# fr_label + (rightmost_col - col). --flip-strings mirrors string order
+# for videos drawn the other way up.
+
+def _find_diagram(frame):
+    """One frame -> diagram signature, or None. Strict on structure so a
+    real filmed fretboard (also lines + frets!) can't pass: pure-white
+    thin lines, exactly 6 razor-uniform rows, 4-7 short verticals."""
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    bright = (gray > 200).astype(np.uint8)
+    W = frame.shape[1]
+    row_span = bright.sum(axis=1)
+    rows = np.flatnonzero((row_span > 0.10 * W) & (row_span < 0.70 * W))
+    if len(rows) < 6:
+        return None
+    lines = []
+    for r in rows:
+        if lines and r - lines[-1][-1] <= 2:
+            lines[-1].append(r)
+        else:
+            lines.append([r])
+    all_lys = [int(np.mean(l)) for l in lines]
+
+    # a frame can hold OTHER bright rows (real guitar-string highlights,
+    # captions) — slide a 6-window over the row groups, most-uniform
+    # first, and let the fret-line structure test decide which is a
+    # diagram (the filmed fretboard never has 4-7 clean bright verticals)
+    cands = []
+    for i in range(len(all_lys) - 5):
+        win = all_lys[i:i + 6]
+        gaps = np.diff(win)
+        if gaps.min() >= 4 and gaps.max() / gaps.min() < 1.3:
+            cands.append((float(np.std(gaps) / np.mean(gaps)), win))
+    for _, lys in sorted(cands, key=lambda c: c[0]):
+        sig = _validate_diagram_window(bright, lys, W)
+        if sig is not None:
+            return sig
+    return None
+
+
+def _validate_diagram_window(bright, lys, W):
+    gap = float(np.mean(np.diff(lys)))
+    top, bot = lys[0], lys[-1]
+
+    line_cols = np.flatnonzero(bright[lys].sum(axis=0) >= 4)
+    if not len(line_cols) or (line_cols.max() - line_cols.min()) > 0.6 * W:
+        return None
+    gx0, gx1 = int(line_cols.min()), int(line_cols.max())
+
+    band = bright[top:bot + 1]
+    col_span = band.sum(axis=0) / (bot - top + 1)
+    vcols = np.flatnonzero(col_span > 0.85)
+    verts = []
+    for c in vcols:
+        if verts and c - verts[-1][-1] <= 2:
+            verts[-1].append(c)
+        else:
+            verts.append([c])
+    vxs = [int(np.mean(v)) for v in verts]
+    if not (4 <= len(vxs) <= 7):
+        return None
+    vgaps = np.diff(vxs)
+    if vgaps.min() < 2 * gap or vgaps.max() / vgaps.min() > 1.3:
+        return None
+
+    dots = set()
+    r = max(3, int(0.30 * gap))
+    for si, ly in enumerate(lys):
+        for ci in range(len(vxs) - 1):
+            cx = (vxs[ci] + vxs[ci + 1]) // 2
+            cell = bright[max(0, ly - r):ly + r + 1, cx - r:cx + r + 1]
+            if cell.size and cell.mean() > 0.55:
+                dots.add((si, ci))
+
+    # x/o marks: try both sides of the grid; the side with marks is the nut
+    marks, marks_side = {}, None
+    for side, zx0, zx1 in (("right", gx1 + 3, gx1 + 3 + int(2.2 * gap)),
+                           ("left", max(0, gx0 - 3 - int(2.2 * gap)), max(0, gx0 - 3))):
+        found = {}
+        for si, ly in enumerate(lys):
+            zone = bright[max(0, ly - int(0.45 * gap)):ly + int(0.45 * gap), zx0:zx1]
+            if zone.size and zone.sum() > 8:
+                ys, xs = np.nonzero(zone)
+                cy, cx = int(np.mean(ys)), int(np.mean(xs))
+                centre = zone[max(0, cy - 1):cy + 2, max(0, cx - 1):cx + 2]
+                found[si] = "x" if centre.mean() > 0.3 else "o"
+        if len(found) > len(marks):
+            marks, marks_side = found, side
+    if not dots and not marks:
+        return None
+    return {"dots": frozenset(dots), "marks": tuple(sorted(marks.items())),
+            "marks_side": marks_side or "right", "ncols": len(vxs) - 1,
+            "lys": lys, "vxs": vxs, "gx": (gx0, gx1), "gap": gap}
+
+
+def find_chord_diagrams(video_path, step_s=0.5):
+    """Sample the video; return the smoothed sequence of unique diagrams:
+    [{ts, sightings, sig, frame}] in song order. Single-sample flickers
+    (transition animations) are dropped, then equal neighbors re-merge."""
+    cap = cv2.VideoCapture(video_path)
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30
+    total = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    raw = []
+    for f in range(0, total, max(1, int(fps * step_s))):
+        cap.set(cv2.CAP_PROP_POS_FRAMES, f)
+        ok, frame = cap.read()
+        if not ok:
+            continue
+        sig = _find_diagram(frame)
+        if sig is None:
+            continue
+        key = (sig["dots"], sig["marks"])
+        if raw and raw[-1]["key"] == key:
+            raw[-1]["sightings"] += 1
+        else:
+            raw.append({"ts": f / fps, "sightings": 1, "sig": sig,
+                        "frame": frame, "key": key})
+    cap.release()
+    smoothed = [d for d in raw if d["sightings"] >= 2]
+    merged = []
+    for d in smoothed:
+        if merged and merged[-1]["key"] == d["key"]:
+            merged[-1]["sightings"] += d["sightings"]
+        else:
+            merged.append(d)
+    return merged
+
+
+def diagram_chord(sig, fr_label, flip_strings=False):
+    """Signature + confirmed base fret -> note list in the data model
+    (string 1 = high e). Frets grow away from the marks column."""
+    ncols = sig["ncols"]
+    away = sig["marks_side"] == "right"
+    notes = []
+    for si in range(6):
+        row_dots = [c for (s, c) in sig["dots"] if s == si]
+        mark = dict(sig["marks"]).get(si)
+        low_e_at_top = not flip_strings
+        phys = si if low_e_at_top else 5 - si        # 0 = low E
+        string_num = 6 - phys                        # data model: 1 = high e
+        if row_dots:
+            col = max(row_dots) if away else min(row_dots)
+            fret = fr_label + ((ncols - 1 - col) if away else col)
+            notes.append({"string": string_num, "fret": int(fret)})
+        elif mark == "o":
+            notes.append({"string": string_num, "fret": 0})
+    return sorted(notes, key=lambda n: -n["string"])
+
+
+def diagram_crops(d, dbg, i):
+    """Save the human-verification crops for one diagram."""
+    sig, frame = d["sig"], d["frame"]
+    gap = sig["gap"]
+    gx0, gx1 = sig["gx"]
+    top, bot = sig["lys"][0], sig["lys"][-1]
+    pad = int(2.6 * gap)
+    box = frame[max(0, top - pad):bot + pad, max(0, gx0 - pad):gx1 + pad]
+    cv2.imwrite(str(dbg / f"diagram_{i}.png"), cv2.resize(box, None, fx=2, fy=2, interpolation=cv2.INTER_NEAREST))
+    name = frame[max(0, top - int(2.4 * gap)):max(0, top - int(0.5 * gap)), max(0, gx0 - pad):gx1 + pad]
+    fr = frame[bot + int(0.3 * gap):bot + int(1.8 * gap), max(0, gx0 - pad):gx1 + pad]
+    if name.size:
+        cv2.imwrite(str(dbg / f"diagram_{i}_name.png"), name)
+    if fr.size:
+        cv2.imwrite(str(dbg / f"diagram_{i}_fret.png"), fr)
+    # annotated overlay: grid green, dots red, marks blue
+    vis = frame.copy()
+    for ly in sig["lys"]:
+        cv2.line(vis, (gx0, ly), (gx1, ly), (0, 180, 0), 1)
+    for vx in sig["vxs"]:
+        cv2.line(vis, (vx, top), (vx, bot), (0, 180, 0), 1)
+    r = int(0.45 * gap)
+    for (si, ci) in sig["dots"]:
+        cx = (sig["vxs"][ci] + sig["vxs"][ci + 1]) // 2
+        cv2.circle(vis, (cx, sig["lys"][si]), r, (0, 0, 255), 2)
+    for si, m in sig["marks"]:
+        mx = gx1 + int(1.2 * gap) if sig["marks_side"] == "right" else gx0 - int(1.2 * gap)
+        cv2.putText(vis, m, (mx, sig["lys"][si] + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 120, 0), 2)
+    cv2.imwrite(str(dbg / f"diagram_{i}_annotated.png"),
+                vis[max(0, top - pad * 2):bot + pad * 2])
+
+
 # ---------------------------------------------------------------- main
 
 def main():
@@ -870,6 +1116,12 @@ def main():
                     help="verified digit for a cluster (e.g. --label 1=5); overrides AI")
     ap.add_argument("--labels-json", help='JSON file {"0": "5", ...} of verified labels '
                     "(same meaning as --label; --label flags win on conflict)")
+    ap.add_argument("--frets", default="", help='chord mode: confirmed base fret per '
+                    'diagram, e.g. "7,6,5,8"')
+    ap.add_argument("--names", default="", help='chord mode: confirmed chord names, '
+                    'e.g. "Bm7,E7,Amaj7,F#9"')
+    ap.add_argument("--flip-strings", action="store_true",
+                    help="chord mode: video draws high e at the top instead of low E")
     args = ap.parse_args()
     dbg = Path(args.debug_dir)
     dbg.mkdir(parents=True, exist_ok=True)
@@ -877,6 +1129,8 @@ def main():
     print("[1/4] finding tab screens ...")
     sections_raw = find_sections(args.video)
     print(f"      {len(sections_raw)} sampled frames show a tab")
+    if not sections_raw and chord_mode(args, dbg):
+        return
 
     print("[2/4] measuring geometry (every frame) ...")
     measured = []

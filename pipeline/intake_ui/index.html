@@ -65,6 +65,25 @@
     </div>
   </section>
 
+  <section id="panel-chords" class="panel hidden">
+    <div class="card">
+      <h2>Confirm each chord <span id="chords-progress" class="chip"></span></h2>
+      <p class="hint">The dots were measured from the video. Confirm the <b>name</b> and the
+        <b>Fr number</b> under each grid — the fret preview updates as you type.
+        This video shows chords only, so the song will be the chord sequence
+        (no strumming rhythm — that part you learn from watching).</p>
+      <div id="chord-cards" class="cards chordcards"></div>
+      <div class="rowform">
+        <label class="checkline" style="margin:0"><input id="flip-strings" type="checkbox">
+          Diagrams look upside-down (flip string order)</label>
+      </div>
+      <div class="rowform">
+        <button id="chords-ai">Ask AI to read names &amp; frets</button>
+        <button id="chords-build" class="primary">Build the song →</button>
+      </div>
+    </div>
+  </section>
+
   <section id="panel-check" class="panel hidden">
     <div class="card">
       <h2>Does the tab match the video?</h2>

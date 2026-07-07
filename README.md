@@ -57,6 +57,15 @@ shape flashcards (mostly prefilled from shapes you've named before);
 check the tab against the video; publish. Done — it's on your phone in
 a minute.
 
+Works for two notation families: **tab videos** (fret numbers on six
+lines — page-flip, app-scroll, and dark scrolling-overlay styles) and
+**chord-diagram videos** (the little grids with finger dots). For
+diagram videos the wizard shows each detected chord next to its
+diagram; you confirm the name and the "Fr" base-fret number (AI reads
+them, you have the final say), and the song comes out as the chord
+sequence with names shown above each chord. No strumming rhythm — the
+diagrams don't notate it.
+
 The manual way, step by step:
 
 1. **Screen-record the tutorial** (IG scraping is against ToS and
