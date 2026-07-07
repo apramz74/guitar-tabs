@@ -28,14 +28,17 @@ def rebuild_index():
         if p.name == "index.json":
             continue
         s = json.loads(p.read_text())
-        entries.append({
+        entry = {
             "file": p.name,
             "title": s["title"],
             "artist": s.get("artist", ""),
             "capo": s.get("capo", 0),
             "measures": len(s["measures"]),
             "qa": s.get("qa", "draft"),
-        })
+        }
+        if s.get("archived"):
+            entry["archived"] = True
+        entries.append(entry)
     (SONGS_DIR / "index.json").write_text(json.dumps(entries, indent=2))
     return entries
 

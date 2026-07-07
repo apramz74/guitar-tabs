@@ -1,20 +1,29 @@
 /* Tabs — phone-first practice viewer for data/songs/*.json.
-   No build step. Edits are saved as local drafts (localStorage) that overlay
-   the committed JSON; "Download JSON" exports a corrected song file to commit
-   back into the repo. A future remote save path can slot into saveDraft(). */
+   No build step.
+
+   Saving: every edit lands in a local draft instantly (works offline),
+   then a debounced sync commits the changed files to GitHub through the
+   Contents API when a token is configured in Settings. Without a token,
+   drafts stay local and "Download JSON" exports a file to commit by hand.
+   Delete = an `archived` flag saved into the song file (restorable);
+   nothing is ever hard-deleted from the app. */
 
 "use strict";
 
 const DATA_DIR = "../data/songs/";
 const FONT_SIZES = [17, 21, 25];
 const SVG_NS = "http://www.w3.org/2000/svg";
+const SYNC_DEBOUNCE_MS = 4000;
 
 const store = {
-  drafts: read("gt.drafts", {}),   // file -> song object, or {deleted:true,title}
-  settings: read("gt.settings", { fontIdx: 1 }),
+  drafts: read("gt.drafts", {}),     // file -> full song object (may carry archived:true)
+  settings: read("gt.settings", { fontIdx: 1, owner: "", repo: "", token: "", apiBase: "" }),
 };
+// migrate away pre-sync tombstones ({deleted:true} placeholders, no song data)
+for (const [f, d] of Object.entries(store.drafts)) if (d && d.deleted) delete store.drafts[f];
+
 function read(key, fallback) {
-  try { return JSON.parse(localStorage.getItem(key)) ?? fallback; }
+  try { return { ...fallback, ...JSON.parse(localStorage.getItem(key)) }; }
   catch { return fallback; }
 }
 function persist() {
@@ -24,35 +33,169 @@ function persist() {
 
 const state = {
   index: null,        // parsed index.json
-  songs: {},          // file -> fetched base song
+  songs: {},          // file -> base song (as saved in the repo)
   file: null,         // current song file
   editMode: false,
   sel: null,          // {m, e, n} measure/event/note indices
   menuOpen: false,
   renameOpen: false,
+  settingsOpen: false,
 };
 
 const app = document.getElementById("app");
 
+/* ---------------------------------------------------------------- GitHub sync */
+
+function ghCfg() {
+  const { owner, repo, token, apiBase } = store.settings;
+  if (!owner || !repo || !token) return null;
+  return { owner, repo, token, base: apiBase || "https://api.github.com" };
+}
+
+async function ghReq(path, opts = {}) {
+  const cfg = ghCfg();
+  const r = await fetch(cfg.base + path, {
+    ...opts,
+    headers: {
+      Authorization: `Bearer ${cfg.token}`,
+      Accept: "application/vnd.github+json",
+      ...(opts.body ? { "Content-Type": "application/json" } : {}),
+    },
+  });
+  if (r.status === 404) return null;
+  if (!r.ok) { const e = new Error(`GitHub ${r.status} on ${path}`); e.status = r.status; throw e; }
+  return r.json();
+}
+
+function contentsPath(file) {
+  const cfg = ghCfg();
+  return `/repos/${cfg.owner}/${cfg.repo}/contents/data/songs/${encodeURIComponent(file)}`;
+}
+async function ghGetJSON(file) {
+  const res = await ghReq(contentsPath(file));
+  if (!res) return null;
+  return { obj: JSON.parse(b64decode(res.content)), sha: res.sha };
+}
+async function ghPutJSON(file, obj, sha, message) {
+  const body = { message, content: b64encode(JSON.stringify(obj, null, 2) + "\n") };
+  if (sha) body.sha = sha;
+  return ghReq(contentsPath(file), { method: "PUT", body: JSON.stringify(body) });
+}
+
+const sync = { timer: null, running: false, status: "idle" };  // idle | saving | offline | error
+
+function scheduleSync() {
+  if (!ghCfg()) { setSyncStatus("idle"); return; }
+  clearTimeout(sync.timer);
+  sync.timer = setTimeout(flushSync, SYNC_DEBOUNCE_MS);
+  setSyncStatus("idle");
+}
+
+async function flushSync() {
+  if (!ghCfg() || sync.running) return;
+  const files = Object.keys(store.drafts);
+  if (!files.length) { setSyncStatus("idle"); return; }
+  sync.running = true;
+  setSyncStatus("saving");
+  try {
+    for (const file of files) await pushSong(file);
+    await pushIndex();
+    setSyncStatus("idle");
+    toast("Saved to GitHub");
+  } catch (err) {
+    console.error("sync:", err);
+    setSyncStatus(navigator.onLine === false || err instanceof TypeError ? "offline" : "error");
+  } finally {
+    sync.running = false;
+  }
+}
+
+async function pushSong(file) {
+  const draft = store.drafts[file];
+  if (!draft) return;
+  const put = async () => {
+    const cur = await ghGetJSON(file);
+    await ghPutJSON(file, draft, cur?.sha, `app: update ${draft.title}`);
+  };
+  try { await put(); }
+  catch (err) {
+    if (err.status === 409 || err.status === 422) await put();  // sha raced; refetch once
+    else throw err;
+  }
+  state.songs[file] = draft;
+  delete store.drafts[file];
+  persist();
+}
+
+async function pushIndex() {
+  const cur = await ghGetJSON("index.json");
+  const idx = cur?.obj ?? state.index ?? [];
+  for (const entry of idx) {
+    const s = effectiveSong(entry.file);
+    if (!s) continue;
+    entry.title = s.title;
+    entry.artist = s.artist || "";
+    entry.capo = s.capo || 0;
+    entry.measures = s.measures.length;
+    entry.qa = s.qa || "draft";
+    if (s.archived) entry.archived = true; else delete entry.archived;
+  }
+  await ghPutJSON("index.json", idx, cur?.sha, "app: update song index");
+  state.index = idx;
+}
+
+function setSyncStatus(s) {
+  if (sync.status === s) return;
+  sync.status = s;
+  render();
+}
+
+function syncChip() {
+  if (!ghCfg()) {
+    return Object.keys(store.drafts).length
+      ? el("span", { class: "chip sync warn" }, "edits on this device only")
+      : null;
+  }
+  const pending = Object.keys(store.drafts).length;
+  const label = sync.status === "saving" ? "saving…"
+    : sync.status === "offline" ? "offline — will retry"
+    : sync.status === "error" ? "save failed — will retry"
+    : pending ? "unsaved changes" : "saved";
+  const cls = sync.status === "saving" ? "busy" : (pending || sync.status !== "idle") ? "warn" : "ok";
+  return el("span", { class: "chip sync " + cls }, label);
+}
+
+window.addEventListener("online", flushSync);
+
 /* ---------------------------------------------------------------- data */
 
-async function fetchJSON(path) {
+async function fetchStatic(path) {
   const r = await fetch(path, { cache: "no-cache" });
   if (!r.ok) throw new Error(`${path}: ${r.status}`);
   return r.json();
 }
 
-function effectiveSong(file) {
-  const d = store.drafts[file];
-  if (d && !d.deleted) return d;
-  return state.songs[file];
+// read through the API when configured (fresh after saves; also works on a
+// private repo), else the static files GitHub Pages / http.server serves
+async function loadData(file) {
+  if (ghCfg()) {
+    const res = await ghGetJSON(file);
+    if (res) return res.obj;
+  }
+  return fetchStatic(DATA_DIR + file);
 }
-function isDraft(file) { return !!store.drafts[file] && !store.drafts[file].deleted; }
-function isDeleted(file) { return !!store.drafts[file]?.deleted; }
+
+function effectiveSong(file) { return store.drafts[file] ?? state.songs[file]; }
+function isDraft(file) { return !!store.drafts[file]; }
+function isArchived(file) {
+  const s = effectiveSong(file);
+  if (s) return !!s.archived;
+  return !!state.index?.find(e => e.file === file)?.archived;
+}
 
 function draftFor(file) {
   // first edit copies the base song into a draft; later edits mutate it
-  if (!isDraft(file)) store.drafts[file] = JSON.parse(JSON.stringify(state.songs[file]));
+  if (!store.drafts[file]) store.drafts[file] = JSON.parse(JSON.stringify(state.songs[file]));
   return store.drafts[file];
 }
 
@@ -64,29 +207,31 @@ window.addEventListener("hashchange", route);
 window.addEventListener("resize", debounce(() => { if (state.file) render(); }, 150));
 
 async function route() {
-  state.menuOpen = false; state.renameOpen = false; state.sel = null; state.editMode = false;
+  state.menuOpen = false; state.renameOpen = false; state.settingsOpen = false;
+  state.sel = null; state.editMode = false;
   const m = location.hash.match(/^#\/s\/(.+)$/);
   state.file = m ? decodeURIComponent(m[1]) : null;
   try {
-    if (!state.index) state.index = await fetchJSON(DATA_DIR + "index.json");
-    if (state.file && !state.songs[state.file] && !isDeleted(state.file)) {
-      state.songs[state.file] = await fetchJSON(DATA_DIR + state.file);
+    if (!state.index) state.index = await loadData("index.json");
+    if (state.file && !state.songs[state.file] && !store.drafts[state.file]) {
+      state.songs[state.file] = await loadData(state.file);
     }
   } catch (err) {
     app.innerHTML = "";
     app.append(el("div", { class: "empty" },
-      "Couldn't load songs. Serve the repo root over HTTP — e.g.  python3 -m http.server  — then open /web/."));
+      "Couldn't load songs. Serve the repo root over HTTP — e.g.  python3 -m http.server  — then open /web/."));
     console.error(err);
     return;
   }
   render();
+  flushSync();   // pick up drafts left over from an offline session
 }
 
 /* ---------------------------------------------------------------- render */
 
 function render() {
   app.innerHTML = "";
-  if (!state.file || isDeleted(state.file)) renderShelf();
+  if (!state.file || isArchived(state.file)) renderShelf();
   else renderSong();
 }
 
@@ -95,18 +240,21 @@ function renderShelf() {
   const wrap = el("div", { class: "shelf" });
   wrap.append(
     el("header", { class: "shelf-head" },
-      el("h1", {}, "Tabs"),
-      el("p", {}, "Your practice library")),
+      el("div", { class: "shelf-top" },
+        el("h1", {}, "Tabs"),
+        el("button", { class: "icon-btn", "aria-label": "Settings", onclick: () => { state.settingsOpen = true; render(); } }, "⚙")),
+      el("p", {}, "Your practice library"),
+      el("div", { class: "song-meta" }, syncChip())),
   );
   const list = el("ul", { class: "songs" });
   let shown = 0;
   for (const entry of state.index) {
-    if (isDeleted(entry.file)) continue;
+    if (isArchived(entry.file)) continue;
     shown++;
-    const draft = isDraft(entry.file) ? store.drafts[entry.file] : null;
-    const title = draft?.title ?? entry.title;
-    const artist = draft?.artist ?? entry.artist;
-    const measures = draft ? draft.measures.length : entry.measures;
+    const song = effectiveSong(entry.file);
+    const title = song?.title ?? entry.title;
+    const artist = song?.artist ?? entry.artist;
+    const measures = song ? song.measures.length : entry.measures;
     const row = el("button", { class: "song-row", onclick: () => { location.hash = "#/s/" + encodeURIComponent(entry.file); } },
       el("h2", {}, title),
       el("div", { class: "song-meta" },
@@ -114,24 +262,30 @@ function renderShelf() {
         entry.capo ? el("span", { class: "chip" }, `capo ${entry.capo}`) : null,
         el("span", { class: "chip" }, `${measures} measures`),
         el("span", { class: "chip qa-" + entry.qa }, entry.qa),
-        draft ? el("span", { class: "chip edited" }, "edited") : null,
+        isDraft(entry.file) ? el("span", { class: "chip edited" }, ghCfg() ? "syncing" : "edited") : null,
       ));
     list.append(el("li", {}, row));
   }
   wrap.append(list);
   if (!shown) wrap.append(el("div", { class: "empty" }, "No songs yet. Extract one with the pipeline, then save it with save_song.py."));
 
-  const tombs = Object.keys(store.drafts).filter(isDeleted);
-  if (tombs.length) {
+  const archived = state.index.filter(e => isArchived(e.file));
+  if (archived.length) {
     wrap.append(el("div", { class: "restore-row" },
-      el("button", {
-        onclick: () => {
-          tombs.forEach(f => delete store.drafts[f]);
-          persist(); render(); toast("Restored");
-        },
-      }, `Restore ${tombs.length} deleted song${tombs.length > 1 ? "s" : ""}`)));
+      ...archived.map(e => el("button", { onclick: () => restoreSong(e.file) }, `Restore “${e.title}”`))));
   }
   app.append(wrap);
+  if (state.settingsOpen) app.append(renderSettings());
+}
+
+async function restoreSong(file) {
+  if (!state.songs[file] && !store.drafts[file]) {
+    try { state.songs[file] = await loadData(file); }
+    catch { toast("Couldn't load that song"); return; }
+  }
+  const draft = draftFor(file);
+  delete draft.archived;
+  persist(); scheduleSync(); render(); toast("Restored");
 }
 
 function renderSong() {
@@ -139,11 +293,12 @@ function renderSong() {
   document.title = song.title;
   const view = el("div", { class: "songview" });
 
-  const sub = [song.tuning || "EADGBE", song.capo ? `capo ${song.capo}` : null, isDraft(state.file) ? "edited" : null]
+  const sub = [song.tuning || "EADGBE", song.capo ? `capo ${song.capo}` : null]
     .filter(Boolean).join(" · ");
   view.append(el("div", { class: "topbar" },
     el("button", { class: "icon-btn", "aria-label": "Back to library", onclick: () => { location.hash = ""; } }, "‹"),
     el("div", { class: "t-title" }, song.title, el("span", { class: "t-sub" }, sub)),
+    syncChip(),
     el("button", { class: "icon-btn", "aria-label": "Song menu", onclick: () => { state.menuOpen = true; render(); } }, "⋯"),
   ));
 
@@ -200,7 +355,7 @@ function songColumns(song) {
   const cols = [];
   song.measures.forEach((measure, m) => {
     measure.notes.forEach((event, e) => cols.push({ type: "event", m, e, notes: notesOf(event) }));
-    cols.push({ type: "bar" });
+    cols.push({ type: "bar", m });
   });
   return cols;
 }
@@ -328,7 +483,7 @@ function renderEditSheet(songRO) {
   const edit = fn => {                       // every change goes through the draft
     const song = draftFor(state.file);
     fn(song, selNote(song), state.sel);
-    persist(); render();
+    persist(); scheduleSync(); render();
   };
   const LEGATO = [["—", undefined], ["h", "h"], ["p", "p"], ["/", "/"], ["\\", "\\"]];
   const STRINGS = ["e", "B", "G", "D", "A", "E"];
@@ -377,7 +532,7 @@ function addNoteAfter(song, n, sel) {
   state.sel = { m: sel.m, e: sel.e + 1, n: 0 };
 }
 
-/* ---------------------------------------------------------------- menu, rename, delete */
+/* ---------------------------------------------------------------- menu, rename, settings */
 
 function renderMenu(song) {
   const close = () => { state.menuOpen = false; render(); };
@@ -387,7 +542,7 @@ function renderMenu(song) {
     el("button", { onclick: () => { state.menuOpen = false; state.editMode = true; render(); toast("Tap a note to edit it"); } }, "Edit tab"),
     el("button", { onclick: () => { state.menuOpen = false; state.renameOpen = true; render(); } }, "Rename…"),
     el("button", { onclick: () => { downloadSong(song); close(); } }, "Download JSON"),
-    isDraft(state.file) ? el("button", {
+    isDraft(state.file) && !ghCfg() ? el("button", {
       onclick: () => {
         if (confirm("Discard your local edits and go back to the committed tab?")) {
           delete store.drafts[state.file]; persist();
@@ -399,9 +554,9 @@ function renderMenu(song) {
     el("button", {
       class: "danger",
       onclick: () => {
-        if (confirm(`Delete “${song.title}”? (Removable from the library now; restore from the list page.)`)) {
-          store.drafts[state.file] = { deleted: true, title: song.title };
-          persist(); location.hash = "";
+        if (confirm(`Remove “${song.title}” from the library? You can restore it from the list page.`)) {
+          draftFor(state.file).archived = true;
+          persist(); scheduleSync(); location.hash = "";
         } else close();
       },
     }, "Delete song"),
@@ -421,12 +576,50 @@ function renderRename(song) {
   form.addEventListener("submit", ev => {
     ev.preventDefault();
     const t = input.value.trim();
-    if (t) { draftFor(state.file).title = t; persist(); }
+    if (t) { draftFor(state.file).title = t; persist(); scheduleSync(); }
     close();
   });
   const dlg = el("div", { class: "dialog" }, form);
   dlg.addEventListener("click", ev => { if (ev.target === dlg) close(); });
   queueMicrotask(() => input.select());
+  return dlg;
+}
+
+function renderSettings() {
+  const close = () => { state.settingsOpen = false; render(); };
+  const s = store.settings;
+  const owner = el("input", { value: s.owner, placeholder: "github username", "aria-label": "GitHub owner", autocapitalize: "none" });
+  const repo = el("input", { value: s.repo, placeholder: "guitar-tabs", "aria-label": "Repository", autocapitalize: "none" });
+  const token = el("input", { value: s.token, type: "password", placeholder: "fine-grained token", "aria-label": "Token" });
+  const form = el("form", {},
+    el("h3", {}, "Saving to GitHub"),
+    el("p", { class: "hint" },
+      "Edits save to your repo a few seconds after you stop editing. Create a fine-grained token with read/write access to Contents on just this repo."),
+    el("label", {}, "Owner", owner),
+    el("label", {}, "Repository", repo),
+    el("label", {}, "Token", token),
+    el("div", { class: "actions" },
+      el("button", { type: "button", onclick: close }, "Cancel"),
+      el("button", {
+        type: "button", onclick: async () => {
+          Object.assign(s, { owner: owner.value.trim(), repo: repo.value.trim(), token: token.value.trim() });
+          persist();
+          if (!ghCfg()) { toast("Fill in all three fields"); return; }
+          try {
+            const r = await ghReq(`/repos/${s.owner}/${s.repo}`);
+            if (!r) throw new Error("not found");
+            toast("Connected ✓");
+          } catch { toast("Couldn't reach that repo"); }
+        },
+      }, "Test"),
+      el("button", { type: "submit", class: "primary" }, "Save")));
+  form.addEventListener("submit", ev => {
+    ev.preventDefault();
+    Object.assign(s, { owner: owner.value.trim(), repo: repo.value.trim(), token: token.value.trim() });
+    persist(); close(); flushSync();
+  });
+  const dlg = el("div", { class: "dialog" }, form);
+  dlg.addEventListener("click", ev => { if (ev.target === dlg) close(); });
   return dlg;
 }
 
@@ -439,6 +632,18 @@ function downloadSong(song) {
 }
 
 /* ---------------------------------------------------------------- utilities */
+
+function b64encode(str) {
+  const bytes = new TextEncoder().encode(str);
+  let bin = "";
+  for (let i = 0; i < bytes.length; i += 8192) bin += String.fromCharCode(...bytes.subarray(i, i + 8192));
+  return btoa(bin);
+}
+function b64decode(b64) {
+  const bin = atob(b64.replace(/\s/g, ""));
+  const bytes = Uint8Array.from(bin, ch => ch.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
+}
 
 function toast(msg) {
   document.querySelectorAll(".toast").forEach(t => t.remove());
