@@ -134,12 +134,28 @@ One JSON file per song in `data/songs/`. Sketch:
    **Still open: hybrid extractor on this video; scrolling-tab and other styles.**
 2. **M2 — Pipeline + JSON:** harden M1 into scripts that write
    `data/songs/*.json` per §6. Add IG-link fetcher with file fallback.
+   **Status: DONE 2026-07-04/06** except the IG fetcher — user screen-
+   records manually and prefers it (ToS-safe, always works); fetcher
+   stays deferred. `extract_cv.py` handles page-flip, app-scroll, and
+   dark scrolling-overlay styles; `save_song.py` writes the JSON;
+   a bar-width sanity pass repairs measure boundaries and flags repairs.
 3. **M3 — Phone-first viewer:** library index + big scrollable tab, re-flowed to
    screen width, optimized for one-handed use. Deploy to GitHub Pages.
+   **Status: DONE 2026-07-06, expanded beyond viewing** (user request):
+   live at https://apramz74.github.io/guitar-tabs/web/ with real drawn
+   arcs/slides, full editing (fix/add/delete notes anywhere, chord
+   building, measure merge/split), rename/archive/restore, Song info,
+   and immediate saves — edits auto-commit to the repo via the GitHub
+   API with a per-device token (drafts-only without one).
 4. **M4 (deferred, but aligned) — Reliability & low-touch practice:** per-song
    review/correction screen; practice-time conveniences (auto-scroll or
    tap-to-advance) that reduce device interaction. Prioritized after M1 reveals
    real output quality.
+   **Status: correction largely arrived early** inside M3's editor plus
+   the pipeline's suspect/repeat flags. Still open: practice-time
+   conveniences (auto-scroll / tap-to-advance), and the Mac-side video
+   intake app (drop a recording → label flashcards → preview → publish)
+   so adding songs needs no terminal.
 
 ## 9. Known risks
 

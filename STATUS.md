@@ -1,6 +1,6 @@
 # Project status & next steps
 
-Last updated: 2026-07-04. Read `PRD.md` for goals and decisions; this file is
+Last updated: 2026-07-07. Read `PRD.md` for goals and decisions; this file is
 where we track progress between sessions. Plain English, always.
 
 ## Where the project stands
