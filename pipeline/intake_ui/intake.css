@@ -51,7 +51,7 @@ label input { margin-top: 5px; font-size: 16px; letter-spacing: normal; }
 label.half { display: inline-block; width: 47%; margin-right: 2%; }
 label.checkline { text-transform: none; letter-spacing: 0; font-size: 15px; color: var(--ink);
   display: flex; gap: 8px; align-items: center; }
-label.checkline input { width: auto; margin: 0; }
+label.checkline input { width: 18px; height: 18px; margin: 0; padding: 0; flex: none; accent-color: var(--brass); }
 
 .drop { border-style: dashed; text-align: center; }
 .drop.over { border-color: var(--brass); background: var(--panel-2); }

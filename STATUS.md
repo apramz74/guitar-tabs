@@ -122,11 +122,14 @@ flashcards if the code changed.)
 - **Verified:** IG link end-to-end in the real UI (download ✓, graceful
   "no readable tab" dead-end — that reel's tiny overlay is a new
   style); YouTube link likewise; publish plumbing with push off.
-  **Still to verify: the full happy path with video 1** — blocked
-  because macOS revoked this session's Downloads access mid-day.
-  Expected: labels fully prefilled, dry-run publish byte-identical to
-  committed cannock-chase.json; then the acceptance test is the user
-  adding a genuinely new song solo.
+  **Happy path VERIFIED** (2026-07-07, after user unblocked the file):
+  video 1 through the real wizard — all 9 shapes prefilled, tab built
+  with the correct measure-7 flag, dry-run publish byte-identical to
+  the committed cannock-chase.json. Remaining acceptance test: user
+  adds a genuinely new song solo. User's own first run surfaced the
+  fourth style family: chord-diagram videos (grids with finger dots,
+  e.g. instagram reel DVpdgiozJPW) — no tab on screen, correctly
+  dead-ends; SUPPORT NOT BUILT YET, natural next piece.
 
 ## Next steps, in priority order
 
