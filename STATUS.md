@@ -90,15 +90,26 @@ flashcards if the code changed.)
    all three songs rendered at phone width; edit/rename/revert/delete/
    restore click-tested (Playwright + system Chrome).
    Run locally: `python3 -m http.server` from repo root → open `/web/`.
-   **Still open for M3 (user asked, not yet answered 2026-07-06):**
-   - Write path for phone edits: GitHub-API-with-token (recommended) vs
-     Mac-only vs drafts-only. Drafts work today; token path can slot into
-     `saveDraft()`/menu later.
-   - Video intake ("submit video for analysis"): recommended as a small
-     Mac-local import app wrapping the pipeline (extract → label
-     flashcards → preview → save). Not built yet.
-   - Publishing: repo has NO GitHub remote yet. Pages needs: create repo,
-     push, enable Pages (user decision: account/public-vs-private).
+   **2026-07-06 later: Pieces A + B of the approved plan are BUILT:**
+   - A — immediate saves: Settings takes owner/repo/fine-grained token;
+     edits auto-commit through the GitHub Contents API ~4 s after you
+     stop editing (index.json kept in sync); topbar chip shows saving/
+     saved/offline-will-retry; drafts flush on app start and when back
+     online; delete = restorable `archived` flag. Verified end-to-end
+     against a local mock of the Contents API.
+   - B — add notes anywhere: in edit mode every empty spot shows a faint
+     `+` (empty strings of an event = chord-building; gaps between
+     events, measure ends, empty measures = insert). Bar-line tap opens
+     measure ops (add measure after / delete measure). Emptied measures
+     survive. All flows click-tested; data round-trips byte-identical.
+   **Blocked on user (one command):** the repo has no GitHub remote —
+   automation is not allowed to create one. User runs
+   `gh repo create guitar-tabs --public --source . --push` (or
+   --private; Pages then needs GitHub Pro), enables Pages, creates a
+   fine-grained PAT (Contents RW), pastes it into app Settings. Then
+   re-verify saves against the real repo.
+   - Video intake ("submit video for analysis"): still not built —
+     next major piece, as a Mac-local import app wrapping the pipeline.
 3. **Label-by-shape** (kills the fragile cluster-index labels): store labeled
    glyph images per video; match new clusters to stored shapes by the same
    distance metric. Removes relabel-after-every-change pain.

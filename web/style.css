@@ -136,6 +136,8 @@ button:focus-visible, a:focus-visible {
 .tabline .mark-label { fill: var(--brass); }
 .tabline .sel-halo { fill: color-mix(in srgb, var(--brass) 22%, transparent); stroke: var(--brass); }
 .tabline .hit { fill: transparent; }
+.tabline .plus { fill: var(--brass); opacity: 0.5; }
+.tabline .plus.dim { opacity: 0.28; }
 
 .song-note {
   margin: 10px var(--pad) 0;

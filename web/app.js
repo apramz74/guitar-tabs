@@ -37,6 +37,7 @@ const state = {
   file: null,         // current song file
   editMode: false,
   sel: null,          // {m, e, n} measure/event/note indices
+  barSel: null,       // measure index whose bar was tapped (measure ops)
   menuOpen: false,
   renameOpen: false,
   settingsOpen: false,
@@ -208,7 +209,7 @@ window.addEventListener("resize", debounce(() => { if (state.file) render(); }, 
 
 async function route() {
   state.menuOpen = false; state.renameOpen = false; state.settingsOpen = false;
-  state.sel = null; state.editMode = false;
+  state.sel = null; state.barSel = null; state.editMode = false;
   const m = location.hash.match(/^#\/s\/(.+)$/);
   state.file = m ? decodeURIComponent(m[1]) : null;
   try {
@@ -311,8 +312,9 @@ function renderSong() {
   app.append(view);
   drawTab(tabwrap, song);          // needs layout width, so after DOM insert
 
-  // thumb bar / edit sheet
+  // thumb bar / edit sheet / measure sheet
   if (state.editMode && state.sel) app.append(renderEditSheet(song));
+  else if (state.editMode && state.barSel !== null) app.append(renderMeasureSheet(song));
   else {
     app.append(el("div", { class: "thumbbar" },
       el("button", { class: "tb-btn", "aria-label": "Smaller text", onclick: () => bumpFont(-1) }, "A−"),
@@ -320,8 +322,8 @@ function renderSong() {
       el("button", {
         class: "tb-btn", "aria-pressed": String(state.editMode),
         onclick: () => {
-          state.editMode = !state.editMode; state.sel = null; render();
-          if (state.editMode) toast("Tap a note to edit it");
+          state.editMode = !state.editMode; state.sel = null; state.barSel = null; render();
+          if (state.editMode) toast("Tap a note to edit, a + to add");
         },
       }, state.editMode ? "Done" : "Edit"),
     ));
@@ -350,11 +352,17 @@ function noteLabel(n) {
   return n.ghost ? `(${f})` : f;
 }
 
-// flatten song into drawable columns
-function songColumns(song) {
+// flatten song into drawable columns; in edit mode, weave an insertion
+// slot before every event and at each measure's end (so empty measures
+// stay tappable too)
+function songColumns(song, withSlots) {
   const cols = [];
   song.measures.forEach((measure, m) => {
-    measure.notes.forEach((event, e) => cols.push({ type: "event", m, e, notes: notesOf(event) }));
+    measure.notes.forEach((event, e) => {
+      if (withSlots) cols.push({ type: "slot", m, at: e });
+      cols.push({ type: "event", m, e, notes: notesOf(event) });
+    });
+    if (withSlots) cols.push({ type: "slot", m, at: measure.notes.length });
     cols.push({ type: "bar", m });
   });
   return cols;
@@ -370,9 +378,10 @@ function drawTab(container, song) {
   const W = Math.max(280, container.clientWidth - 8);
   const yOf = s => padTop + (s - 1) * gapY;
 
-  const cols = songColumns(song);
+  const cols = songColumns(song, state.editMode);
   for (const c of cols) {
     if (c.type === "bar") { c.w = 2 + colGap; continue; }
+    if (c.type === "slot") { c.w = 0.95 * fs; continue; }
     c.w = Math.max(...c.notes.map(n => textWidth(noteLabel(n), fs))) + colGap;
     // a slide to the next note needs shoulder room for the slanted stroke
     if (c.notes.some(n => n.legato_next === "/" || n.legato_next === "\\")) c.w += 0.8 * fs;
@@ -410,7 +419,36 @@ function drawTab(container, song) {
     for (const [ci, c] of lineCols.entries()) {
       if (c.type === "bar") {
         svg.append(elNS("line", { x1: c.cx, y1: yOf(1), x2: c.cx, y2: yOf(6), stroke: "var(--line)", "stroke-width": 2 }));
+        if (state.editMode) {
+          svg.append(elNS("rect", {
+            x: c.x, y: yOf(1) - 0.5 * fs, width: c.w, height: 5 * gapY + fs, class: "hit bar-hit",
+            onclick: () => { state.barSel = c.m; state.sel = null; render(); },
+          }));
+        }
         continue;
+      }
+      if (c.type === "slot") {           // edit mode only: insert a note here
+        for (let s = 1; s <= 6; s++) {
+          svg.append(elNS("text", { x: c.cx, y: yOf(s), "text-anchor": "middle", "dominant-baseline": "central", "font-size": 0.62 * fs, class: "plus" }, "+"));
+          svg.append(elNS("rect", {
+            x: c.x, y: yOf(s) - 0.7 * fs, width: c.w, height: 1.4 * fs, class: "hit slot-hit",
+            "data-m": c.m, "data-at": c.at, "data-s": s,
+            onclick: () => editSong((song2) => insertNoteAt(song2, c.m, c.at, s)),
+          }));
+        }
+        continue;
+      }
+      const taken = new Set(c.notes.map(n => n.string));
+      if (state.editMode) {              // chord-building: empty strings of an event
+        for (let s = 1; s <= 6; s++) {
+          if (taken.has(s)) continue;
+          svg.append(elNS("text", { x: c.cx, y: yOf(s), "text-anchor": "middle", "dominant-baseline": "central", "font-size": 0.62 * fs, class: "plus dim" }, "+"));
+          svg.append(elNS("rect", {
+            x: c.x, y: yOf(s) - 0.7 * fs, width: c.w, height: 1.4 * fs, class: "hit chord-hit",
+            "data-m": c.m, "data-e": c.e, "data-s": s,
+            onclick: () => editSong((song2) => addChordNote(song2, c.m, c.e, s)),
+          }));
+        }
       }
       for (const [ni, n] of c.notes.entries()) {
         const y = yOf(n.string);
@@ -520,8 +558,8 @@ function deleteSelected(song, _n, sel) {
     event.chord.splice(sel.n, 1);
     if (event.chord.length === 1) measure.notes[sel.e] = event.chord[0];
   } else {
+    // an emptied measure stays — its insertion slot keeps it editable
     measure.notes.splice(sel.e, 1);
-    if (!measure.notes.length) song.measures.splice(sel.m, 1);
   }
   state.sel = null;
 }
@@ -530,6 +568,50 @@ function addNoteAfter(song, n, sel) {
   const fresh = { string: n.string, fret: n.fret };
   song.measures[sel.m].notes.splice(sel.e + 1, 0, fresh);
   state.sel = { m: sel.m, e: sel.e + 1, n: 0 };
+}
+
+// mutations behind the + targets; all go through the draft like the sheet
+function editSong(fn) {
+  const song = draftFor(state.file);
+  fn(song);
+  persist(); scheduleSync(); render();
+}
+
+function insertNoteAt(song, m, at, string) {
+  song.measures[m].notes.splice(at, 0, { string, fret: 0 });
+  state.sel = { m, e: at, n: 0 };
+  state.barSel = null;
+}
+
+function addChordNote(song, m, e, string) {
+  const event = song.measures[m].notes[e];
+  if (event.chord) {
+    event.chord.push({ string, fret: 0 });
+    state.sel = { m, e, n: event.chord.length - 1 };
+  } else {
+    song.measures[m].notes[e] = { chord: [event, { string, fret: 0 }] };
+    state.sel = { m, e, n: 1 };
+  }
+  state.barSel = null;
+}
+
+function renderMeasureSheet(song) {
+  const m = state.barSel;
+  if (m === null || !song.measures[m]) { state.barSel = null; return el("span"); }
+  return el("div", { class: "sheet", role: "dialog", "aria-label": "Measure" },
+    el("h3", {}, `Measure ${m + 1} of ${song.measures.length}`),
+    el("div", { class: "actions" },
+      el("button", {
+        class: "danger",
+        onclick: () => {
+          if (confirm(`Delete measure ${m + 1} and its ${song.measures[m].notes.length} event(s)?`)) {
+            editSong(s => { s.measures.splice(m, 1); state.barSel = null; });
+          }
+        },
+      }, "Delete measure"),
+      el("button", { onclick: () => editSong(s => { s.measures.splice(m + 1, 0, { notes: [] }); state.barSel = m + 1; }) }, "＋ Measure after"),
+      el("button", { class: "primary", onclick: () => { state.barSel = null; render(); } }, "Done")),
+  );
 }
 
 /* ---------------------------------------------------------------- menu, rename, settings */
